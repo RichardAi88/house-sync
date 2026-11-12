@@ -1,0 +1,10 @@
+{
+  "name": "house-sync-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local browser viewer for House Sync",
+  "license": "MIT",
+  "dependencies": {
+    "three": "0.187.0"
+  }
+}

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#123b3b">
+  <title>House Sync — Design and documents in step</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="House Sync home"><span class="brand-icon" aria-hidden="true">⌂</span><span>house<span class="brand-accent">sync</span></span><span class="alpha-label">EARLY PREVIEW</span></a>
+    <span class="header-caption">One house. A coordinated set of documents.</span>
+    <div id="revision-pill" class="revision-pill"><span class="status-dot"></span><span id="revision-label">Preparing first revision</span></div>
+  </header>
+  <main class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-heading"><span class="eyebrow">YOUR PROJECT</span><h1>Make it your home.</h1><p>Adjust the house. Keep the details in step.</p></div>
+      <form id="house-form">
+        <label class="field">Project name<input id="project-name" name="project_name" maxlength="120" value="My first house" required></label>
+        <div class="section-heading"><h2>Dimensions</h2><span>metres</span></div>
+        <div class="field-grid">
+          <label class="field">Internal length<div class="input-unit"><input id="length" type="number" min="3" max="30" step="0.1" value="10" required><span>m</span></div></label>
+          <label class="field">Internal width<div class="input-unit"><input id="width" type="number" min="3" max="30" step="0.1" value="8" required><span>m</span></div></label>
+          <label class="field">Wall height<div class="input-unit"><input id="height" type="number" min="2.4" max="5" step="0.1" value="3" required><span>m</span></div></label>
+          <label class="field">Wall thickness<div class="input-unit"><input id="thickness" type="number" min="0.1" max="0.5" step="0.01" value="0.2" required><span>m</span></div></label>
+        </div>
+        <p class="field-note">Room dimensions are clear internal sizes. Overall dimensions include the walls.</p>
+        <div class="section-heading"><h2>Wall finish</h2><span>inside &amp; outside</span></div>
+        <div class="paint-presets" role="group" aria-label="Paint colour presets">
+          <button class="paint-swatch active" type="button" data-colour="#ADD8E6" data-name="Light blue" title="Light blue" aria-label="Light blue" aria-pressed="true" style="--swatch:#ADD8E6"></button>
+          <button class="paint-swatch" type="button" data-colour="#F3EDE0" data-name="Warm white" title="Warm white" aria-label="Warm white" aria-pressed="false" style="--swatch:#F3EDE0"></button>
+          <button class="paint-swatch" type="button" data-colour="#A7B5A1" data-name="Sage green" title="Sage green" aria-label="Sage green" aria-pressed="false" style="--swatch:#A7B5A1"></button>
+          <button class="paint-swatch" type="button" data-colour="#D5B1A0" data-name="Soft terracotta" title="Soft terracotta" aria-label="Soft terracotta" aria-pressed="false" style="--swatch:#D5B1A0"></button>
+          <button class="paint-swatch" type="button" data-colour="#B6BCC3" data-name="Cool grey" title="Cool grey" aria-label="Cool grey" aria-pressed="false" style="--swatch:#B6BCC3"></button>
+          <label class="custom-swatch" title="Choose custom colour"><input id="paint-hex" type="color" value="#add8e6" aria-label="Custom paint colour"><span aria-hidden="true">+</span></label>
+        </div>
+        <label class="field">Finish description<input id="paint-colour" maxlength="80" value="Light blue" required></label>
+        <details class="rate-details">
+          <summary>Unit rates <span>illustrative allowances</span></summary>
+          <label class="field">Currency<select id="currency"><option>SGD</option><option>MYR</option><option>USD</option><option>GBP</option><option>AUD</option></select></label>
+          <div class="rate-field"><label for="rate-floor">Floor / m²</label><input id="rate-floor" type="number" min="0" step="0.01" value="80"></div>
+          <div class="rate-field"><label for="rate-wall">Wall construction / m³</label><input id="rate-wall" type="number" min="0" step="0.01" value="300"></div>
+          <div class="rate-field"><label for="rate-roof">Roof / m²</label><input id="rate-roof" type="number" min="0" step="0.01" value="120"></div>
+          <div class="rate-field"><label for="rate-paint">Paint / m²</label><input id="rate-paint" type="number" min="0" step="0.01" value="12"></div>
+          <div class="rate-field"><label for="rate-opening">Door or window / each</label><input id="rate-opening" type="number" min="0" step="0.01" value="500"></div>
+        </details>
+        <button id="build-button" type="submit" class="primary-button"><span class="button-icon" aria-hidden="true">↻</span><span id="build-label">Update house &amp; documents</span></button>
+        <p id="form-status" class="form-status" aria-live="polite">Loading your house…</p>
+        <p id="error-message" class="error-message" role="alert" hidden></p>
+      </form>
+      <div class="settings-actions"><button id="save-settings" class="text-button" type="button" disabled>Save design JSON ↓</button><label class="text-button import-label">Open design JSON ↑<input id="load-settings" type="file" accept=".json,application/json"></label></div>
+      <div class="sidebar-footnote"><span class="tiny-house" aria-hidden="true">⌂</span><p>A simple, single-storey concept.<br>Powered by homespec.</p></div>
+    </aside>
+    <section class="workspace" aria-label="House design workspace">
+      <div class="workspace-heading"><div><span class="eyebrow">DESIGN WORKSPACE</span><h2 id="project-title">My first house</h2></div><span id="sync-status" class="sync-badge">Building your first design</span></div>
+      <nav class="view-tabs" aria-label="Project views" role="tablist">
+        <button class="view-tab active" id="tab-model" data-panel="model" role="tab" aria-selected="true" aria-controls="panel-model">3D model</button>
+        <button class="view-tab" id="tab-drawings" data-panel="drawings" role="tab" aria-selected="false" aria-controls="panel-drawings">Drawings</button>
+        <button class="view-tab" id="tab-boq" data-panel="boq" role="tab" aria-selected="false" aria-controls="panel-boq">Bill of quantities</button>
+        <button class="view-tab" id="tab-spec" data-panel="spec" role="tab" aria-selected="false" aria-controls="panel-spec">Specification</button>
+      </nav>
+      <div id="panel-model" class="view-panel model-panel" role="tabpanel" aria-labelledby="tab-model">
+        <div class="viewport-toolbar"><span id="selected-element" class="element-label">Select an element to inspect</span><div class="viewport-controls"><label><input id="roof-toggle" type="checkbox"> Show roof</label><button id="reset-camera" type="button" title="Reset camera" aria-label="Reset camera">↺</button></div></div>
+        <div id="viewport" aria-label="Interactive 3D house model"></div>
+        <div id="viewer-message" class="viewer-message">Preparing your house model…</div>
+        <div class="viewport-hint"><span>Drag to orbit</span><span>Scroll to zoom</span><span>Right-drag to pan</span></div>
+        <div class="model-corner-label">SINGLE-STOREY CONCEPT <span id="model-dimensions">10.0 × 8.0 m clear</span></div>
+      </div>
+      <div id="panel-drawings" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-drawings" hidden><div class="document-heading"><div><h3>Plans &amp; elevations</h3><p>Dimensioned from the same house revision.</p></div><a data-file="drawings_pdf" class="secondary-button disabled" aria-disabled="true">Download PDF ↓</a></div><div class="drawing-sheet"><img id="drawing-preview" alt="Dimensioned floor plan, front elevation and side elevation of the current house"></div></div>
+      <div id="panel-boq" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-boq" hidden><div class="document-heading"><div><h3>Bill of quantities</h3><p>Measured quantities with editable illustrative rates.</p></div><a data-file="boq_xlsx" class="secondary-button disabled" aria-disabled="true">Download Excel ↓</a></div><div class="table-scroll"><table class="boq-table"><thead><tr><th>Item</th><th>Description</th><th>Quantity</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead><tbody id="boq-body"></tbody><tfoot><tr><th colspan="5">Illustrative subtotal</th><td id="boq-total">—</td></tr></tfoot></table></div><p id="measurement-note" class="document-note"></p></div>
+      <div id="panel-spec" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-spec" hidden><div class="document-heading"><div><h3>Project specification</h3><p>A coordinated technical schedule for your contract documents.</p></div><a data-file="specification_docx" class="secondary-button disabled" aria-disabled="true">Download Word ↓</a></div><article class="spec-sheet"><div class="spec-document-label">DRAFT · CONCEPT DESIGN</div><h3 id="spec-title">My first house</h3><p id="spec-revision" class="spec-revision"></p><div id="spec-content"></div><p class="spec-disclaimer">This draft describes the current concept and selected finishes. Complete construction details, engineering design, statutory requirements, and contract terms require project-specific development and review.</p></article></div>
+      <div class="metrics-row" aria-label="Current house quantities"><div class="metric"><span>Internal floor area</span><strong id="metric-floor">— <small>m²</small></strong></div><div class="metric"><span>Painted wall area</span><strong id="metric-paint">— <small>m²</small></strong></div><div class="metric"><span>Doors &amp; windows</span><strong id="metric-openings">—</strong></div><div class="metric cost-metric"><span>Illustrative subtotal</span><strong id="metric-cost">—</strong></div></div>
+      <section class="download-bar" aria-label="Download current documents"><div><span class="download-heading">Your coordinated document set</span><p id="download-revision">Available after the house has been generated.</p></div><div class="download-links"><a data-file="boq_xlsx" class="download-link disabled" aria-disabled="true"><span class="file-icon">XLS</span>BOQ</a><a data-file="specification_pdf" class="download-link disabled" aria-disabled="true"><span class="file-icon">PDF</span>Specification</a><a data-file="drawings_pdf" class="download-link disabled" aria-disabled="true"><span class="file-icon">PDF</span>Drawings</a><a data-file="ifc" class="download-link disabled" aria-disabled="true"><span class="file-icon">IFC</span>Model</a></div></section>
+      <footer class="workspace-footer">Concept study · Rates are illustrative, not supplier quotations · All dimensions in generated drawings are in millimetres.</footer>
+    </section>
+  </main>
+</body>
+</html>

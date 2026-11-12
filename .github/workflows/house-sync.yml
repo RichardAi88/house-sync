@@ -1,0 +1,31 @@
+name: House Sync
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: '3.12'
+      - name: Install locked environment
+        run: uv sync --frozen --extra dev
+      - name: Lint House Sync
+        run: uv run --frozen ruff check housesync tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py
+      - name: Test model and coordinated exports
+        run: uv run --frozen pytest tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py -q
+      - name: Check browser source
+        run: node --check housesync/static/app.js

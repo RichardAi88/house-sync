@@ -5,3 +5,11 @@ assets/*
 __pycache__/
 *.blend1
 .claude/worktrees/
+node_modules/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+*.log
+.env
+.env.*

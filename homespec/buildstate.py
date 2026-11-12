@@ -59,15 +59,30 @@ def atomic_json(path: Path, value: Any) -> None:
 @contextmanager
 def build_lock(root: Path) -> Iterator[None]:
     """Serialize writers; the OS releases the advisory lock after a crash."""
-    import fcntl
-
     root.mkdir(parents=True, exist_ok=True)
-    with (root / ".build.lock").open("a") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    with (root / ".build.lock").open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+
+            # Windows byte-range locks require a real byte and a fixed offset.
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _source_files(root: Path, excluded: Path | None = None) -> list[Path]:

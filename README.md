@@ -1,216 +1,69 @@
-# homespec
+# House Sync
 
-A house as source code.
+A house model with a coordinated bill of quantities, technical specification, and dimensioned drawings. Change dimensions or the paint finish in the local browser editor, then select **Update house & documents** to regenerate the complete set from one shared model revision.
 
-One spec compiles into everything a project needs: the contractor's BIM
-model, dimensioned drawings, schedules, a rule report, and a walkthrough you
-can walk around in. Edit the spec, rebuild, and every output agrees.
+Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The original MIT licence, source, examples and Git history are retained. Read the [original homespec README](HOMESPEC_README.md) for its compiler and Blender workflows.
 
-```python
-from homespec import *
+## First version
 
-def build() -> House:
-    with House("cabin") as house:
-        L0 = Level("L0", height=2700)
-        g = Grid(x={"A": 0, "B": 6000}, y={"1": 0, "2": 4000})
-        A, B, one, two = g.lines("A", "B", "1", "2")
+- A single-storey, single-room rectangular shell with a flat roof, one door, and two windows.
+- Editable clear internal length/width, wall height/thickness, paint name/colour, currency, and five illustrative unit rates.
+- An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
+- BOQ in Excel/CSV; technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
+- Save/reopen a design as JSON. Previous generated revisions remain available locally.
+- Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 
-        plaster = Material("plaster", texture="polyhaven/painted_plaster_wall", product="Lime plaster", supplier="TBD")
-        timber = Material("timber", product="Timber framing", supplier="TBD")
-        glass = Material("glass", product="Double glazing", supplier="TBD")
-        ext = Assembly("ext", layers=[Layer(material="plaster", thickness=15), Layer(material="timber", thickness=140),
-                                      Layer(material="plaster", thickness=15)], finish_in=plaster)
+## Run on Windows
 
-        W1 = Wall("W1", A & one, B & one, assembly=ext, level=L0)
-        W2 = Wall("W2", B & one, B & two, assembly=ext, level=L0)
-        W3 = Wall("W3", B & two, A & two, assembly=ext, level=L0)
-        W4 = Wall("W4", A & two, A & one, assembly=ext, level=L0)
-        Door("D1", host=W1, width=1000, height=2100, at=600, frame=timber, leaf=timber, glazing=glass)
-        Window("N1", host=W3, width=2600, height=1500, sill=900, at="center", frame=timber, glazing=glass)
-        Space("room", outline=[A & one, B & one, B & two, A & two], use="studio", level=L0, bounded_by=[W1, W2, W3, W4])
-    return house
-```
+Prerequisites: Git, [uv](https://docs.astral.sh/uv/), Python 3.12, and Node.js/npm. The initial installation needs internet access. Subsequent editing and export generation use local dependencies, without Blender, an AI API key, or an external SVG converter.
 
-Save a spec as `project.py` beside its `decisions.md`. To build an existing
-example after installing:
+~~~powershell
+git clone https://github.com/RichardAi88/house-sync.git
+cd house-sync
+uv sync --frozen --extra dev --python 3.12 --cache-dir .cache/uv
+npm.cmd ci --cache .cache/npm
+.venv\Scripts\python.exe -m housesync.server --open
+~~~
 
-```bash
-uv run --frozen homespec build projects/library_room
-```
+After setup, double-click **start-house-sync.cmd**. Open **http://127.0.0.1:8765**. Keep the launcher running while using the editor; Ctrl+C stops it. GitHub stores source and history; this backend runs locally on this PC's loopback interface.
 
-The command prints the immutable generation directory and its check status.
-`out/library_room/manifest.json` identifies the latest attempt; geometry and
-exports live together under `out/library_room/generations/<generation>/`.
+On macOS/Linux use `.venv/bin/python -m housesync.server --open` after the same uv/npm setup. Initial local verification was on Windows with Python 3.12.
 
-## What you get
+## A change you can verify
 
-- **`house.ifc`** — IFC 4 with real `IfcWall` bodies, `IfcOpeningElement`
-  voids filled by doors and windows, storeys, spaces, materials, and a
-  property set on every element carrying its spec parameters. Opens in any
-  BIM tool.
-- **`drawings/`** — a dimensioned floor plan as SVG, PDF and DXF. A true
-  section cut with the CAD kernel, with every opening dimensioned from its
-  wall's start.
-- **`schedules/`** — walls, openings, finishes, joinery, services, spaces as
-  CSV.
-- **`checks.md`** — every rule that ran and what it found: the rules of
-  thumb, every pair of solids that share volume and whether construction
-  allows it, and whether `decisions.md` still refers to things that exist.
-  Plus an IDS file validated against the IFC.
-- **Diagnostic views** — on request (`homespec views`), Workbench renders of the same
-  model for the eye: orbits, elevations, a plan section per storey, a long
-  and a cross section, the structure alone. One colour per kind, black
-  outlines, a second per frame.
-- **Blender scenes** — `house.blend` for stills and animation, and
-  `house_walk.blend` for a first-person walk. Views, renders and scenes live
-  under `out/<project>/presentation/<generation>/<presentation-fingerprint>/`.
+The default house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. Its compiled floor area is **80 m2**, net wall volume **20.94 m3**, painted area **209.4 m2**, and flat roof area **99 m2**. The illustrative subtotal is **SGD 28,574.80**.
 
-Every entity keeps its id everywhere: spec, IFC name, drawing tag, schedule
-row, Blender object.
+Changing only the length to 12 m increases the clear floor area to **96 m2** and painted wall area to **233.4 m2**. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Rates can be edited independently.
 
-## Install
+## Measurement and document scope
 
-```bash
-uv sync --frozen --extra dev --python 3.13
-uv run --frozen homespec assets   # optional CC0 textures and models for rendering
-```
+Model dimensions are in millimetres; browser geometry is in metres. Drawings distinguish internal clear dimensions from external overall dimensions. Wall corners are counted once. Painting includes internal and external net vertical faces, deducting all modelled opening voids on both faces. Reveals, wastage, coat multipliers and floor/roof paint are excluded. The roof includes a 300 mm overhang. Door/window rows share an illustrative allowance per opening.
 
-The tested Blender version is [5.2.1](https://www.blender.org); set
-`HOMESPEC_BLENDER` if its executable is not discovered automatically. PDF output
-needs `rsvg-convert` (`brew install librsvg`); SVG and DXF need nothing.
+This is a concept application. The BOQ covers modelled items and illustrative rates, not a complete tender estimate. The specification is a technical schedule for development alongside a contract, not a complete contract. Structure, foundations, drainage, services, waterproofing, statutory compliance, workmanship systems and supplier rates require project-specific development. The demonstration does not claim that homespec's building guideline or regulatory checks have been run.
 
-## Looking, rendering and walking
+## Files and development
 
-The commands below assume the virtual environment is active (`source
-.venv/bin/activate`); alternatively prefix each command with `uv run --frozen`.
-
-```bash
-homespec build  projects/library_room
-homespec build  projects/bastide_montfuron
-homespec views  projects/library_room                   # diagnostic views for the published generation
-homespec views  projects/bastide_montfuron --focus CH   # plus close-ups of one entity
-homespec audit  projects/bastide_montfuron              # the dressed scene, judged: things in walls, floating, in the way
-homespec render projects/library_room --mode still      # a Cycles frame
-homespec render projects/library_room --mode anim       # frames for ffmpeg
-homespec render projects/library_room --mode save       # the walk file
-homespec walk   projects/library_room                   # open it; press W to walk
-homespec render projects/library_room --device cpu      # explicit CPU rendering
-```
-
-Every consumer verifies source freshness and artifact hashes. Views and audits
-can inspect complete builds with failed or skipped checks. Rendering and walking
-require `passed`, unless `--allow-failed-checks` is explicit; that flag never
-bypasses stale inputs or damaged files. Rebuild after editing source.
-
-GPU selection defaults to `auto`, discovering available backends and falling back
-to CPU. `--device` accepts `cpu`, `metal`, `cuda`, `optix`, `hip`, or `oneapi`; an
-unavailable explicit choice fails. Saved scenes also carry a build/presentation
-fingerprint and file hash, so an old scene cannot silently serve a new build.
-The presentation fingerprint also covers the downloaded `assets/` tree; changing
-a texture or fetching a missing model requires a fresh presentation.
-
-The views need no presentation and no textures. Look there before spending
-an hour on Cycles: a chimney floating above its ridge or a stair through a
-ceiling is obvious in a section and invisible in a photograph. The audit
-looks at what the presentation adds, the way a designer would: a console
-inside a wall, candlesticks in the air, a bed across a doorway, a pot at
-the foot of a stair. Every render prints the same findings first.
-
-| | |
+| Path | Purpose |
 |---|---|
-| ![The bastide's structure](projects/bastide_montfuron/gallery/11_structure_view.jpg) | ![The bastide in long section](projects/bastide_montfuron/gallery/12_long_section.jpg) |
+| `housesync/schema.py` | Validated house parameters and unit rates |
+| `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
+| `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
+| `housesync/server.py` | Local server and immutable revision publication |
+| `housesync/static/` | Browser editor and Three.js viewer |
+| `out/house-sync/<revision>/` | Generated files; excluded from Git |
+| [Project plan](docs/house-sync-plan.md) | Scope, verification and next features |
+| [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
-## How it is put together
+~~~powershell
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py -q
+.venv\Scripts\ruff.exe check housesync
+node --check housesync/static/app.js
+~~~
 
-```
-source ──compile──▶ IR ──export──▶ IFC · drawings · schedules · checks · Blender
-```
+Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Other platforms retain homespec's normal build123d dependency range.
 
-The **source** is a Python file in a declarative subset: definitions and
-elements as constructor calls. The **IR** is the compiled house as data, with
-exact geometry per entity, a JSON schema and a version. After realization and
-all cuts, a separate analysis pass publishes room/opening links and stair
-clearance facts. Checks and schedules share those facts. Every exporter reads
-only the IR. The core does not know what a wall is; `Wall` is an ordinary
-element class in the standard vocabulary, and a project can add its own.
+The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
 
-Read [docs/design.md](docs/design.md) for the reasoning and
-[docs/vocabulary.md](docs/vocabulary.md) for every element and its fields.
-Three example projects live in `projects/`, each with its `decisions.md`:
-`library_room`, one furnished room; `casale_poggio`, a two-bedroom Umbrian
-stone farmhouse with a gable roof, arches, a pergola and a pool; and
-`bastide_montfuron`, a three-storey Provençal villa.
+## Licence
 
-## Example: Bastide de Montfuron
-
-A tower, two wings, hipped and gabled roofs with génoise cornices, louvred
-shutters in dressed-stone surrounds, an arched glazed door, a brande pergola,
-two straight stairs, a terrace over a retaining wall and a pool garden two
-metres below. The generated report lists every check and each pair of solids
-that shares volume, with the construction reason when that overlap is allowed.
-
-![The bastide from the pool deck](projects/bastide_montfuron/gallery/01_pool_deck.jpg)
-
-| | |
-|---|---|
-| ![Living room](projects/bastide_montfuron/gallery/03_living_room.jpg) | ![Dining room](projects/bastide_montfuron/gallery/04_dining_room.jpg) |
-| ![Kitchen](projects/bastide_montfuron/gallery/06_kitchen.jpg) | ![Hall](projects/bastide_montfuron/gallery/07_hall.jpg) |
-| ![Main bedroom](projects/bastide_montfuron/gallery/05_bedroom.jpg) | ![Tower bedroom](projects/bastide_montfuron/gallery/08_tower.jpg) |
-| ![Under the pergola](projects/bastide_montfuron/gallery/02_pergola.jpg) | ![Ground floor plan](projects/bastide_montfuron/gallery/plan_L0.jpg) |
-
-The source is [project.py](projects/bastide_montfuron/project.py); the
-furniture, planting, sky and camera are in
-[presentation.py](projects/bastide_montfuron/presentation.py) and one module
-per room under [rooms/](projects/bastide_montfuron/rooms), and never reach the
-contractor. Each room was audited and dressed by its own agent from the
-brief in [docs/agents/bastide-room-brief.md](docs/agents/bastide-room-brief.md);
-`HOMESPEC_ROOM=kitchen` renders one room's views on their own. What the contractor does get is committed under
-[deliverables/](projects/bastide_montfuron/deliverables): the IFC, the plans
-as PDF and DXF, the schedules, the checks report and the IDS. Published outputs
-identify their source build. These selected exports are not a reusable IR bundle;
-a standalone IR needs all referenced geometry files. More renders are in
-[gallery/](projects/bastide_montfuron/gallery).
-
-```bash
-homespec build  projects/bastide_montfuron
-homespec render projects/bastide_montfuron --mode still --frame 1,385,1153,1633,2209
-homespec render projects/bastide_montfuron --mode save
-homespec walk   projects/bastide_montfuron
-```
-
-## Build records and data inputs
-
-Build records use `passed`, `failed_checks`, `unchecked`, or `error`. A failed
-attempt is recorded without replacing files in an earlier generation, and the
-manifest retains `previous_successful_generation` for recovery. `report.json`
-contains results, artifact paths and timings; `build.json` records their hashes
-and the input fingerprint. `--no-ifc`, `--no-drawings`, `--no-schedules` and
-`--no-checks` describe the new generation only.
-
-Python project/package sources, decisions, dependency versions and build options
-are fingerprinted automatically. Declare other data reads with
-`House("cabin", inputs=["survey.csv", "products/"])`; paths are relative to the
-project, and directories include their files. Keep `build()` free of side
-effects: projects with declared inputs are evaluated once to discover the inputs,
-then again against the captured snapshot. Changes during compilation prevent
-successful publication. See [the build API](docs/design.md#build-publication-and-consumers).
-
-## Development
-
-```bash
-uv run --frozen pytest                 # unit, property and end-to-end tests
-uv run --frozen ruff check .           # lint
-uv run --frozen pyright                # types
-uv run --frozen homespec schema        # IR 0.3 JSON schema
-```
-
-The [verification record](docs/verification.md) links the tested builds,
-reviewed scenes and published sample exports to their sources.
-
-## Status
-
-Alpha. Three example projects, up to three storeys, straight walls, gable,
-hip, shed and flat roofs, straight stairs, pools. See the end of
-`docs/design.md` for what is deliberately not here yet.
-
-MIT licensed.
+MIT. See [LICENSE](LICENSE). Dependencies retain their respective licences. This project acknowledges homespec's original authorship and does not imply endorsement by its author.

@@ -15,7 +15,8 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-  "build123d>=0.9",
+  "build123d>=0.9,<0.11; sys_platform == 'win32'",
+  "build123d>=0.9; sys_platform != 'win32'",
   "ifcopenshell>=0.8",
   "ifctester>=0.8",
   "numpy>=1.26",
@@ -23,6 +24,9 @@ dependencies = [
   "shapely>=2.0",
   "ezdxf>=1.3",
   "typer>=0.12",
+  "openpyxl>=3.1,<4",
+  "python-docx>=1.1,<2",
+  "reportlab>=4,<5",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +34,7 @@ dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.5", "pyright>=1.1"]
 
 [project.scripts]
 homespec = "homespec.cli:main"
+house-sync = "housesync.server:main"
 
 [project.urls]
 Homepage = "https://github.com/maccman/homespec"
@@ -39,7 +44,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["homespec"]
+packages = ["homespec", "housesync"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
