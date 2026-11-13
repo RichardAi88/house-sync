@@ -84,6 +84,10 @@
         <p id="comparison-status" class="comparison-status" aria-live="polite">Save two designs to capture a change from A to B.</p>
         <p id="comparison-error" class="error-message" role="alert" hidden></p>
         <p id="comparison-draft-note" class="comparison-draft-note" hidden>Current edits have not been saved. This comparison uses the selected saved revisions.</p>
+        <div class="variation-export" aria-label="Variation order PDF">
+          <div><span class="variation-draft-label">DRAFT VARIATION ORDER</span><p id="variation-export-note">Export the selected A to B change, cost breakdown and approval fields for review.</p></div>
+          <a id="export-variation-pdf" data-change-file="variation_pdf" class="variation-export-button disabled" aria-disabled="true" aria-describedby="variation-export-note" tabindex="-1"><span aria-hidden="true">PDF</span> Export variation order PDF</a>
+        </div>
         <div id="comparison-result" hidden>
           <div class="comparison-metrics" aria-label="Cost comparison">
             <div><span>Revision A estimate</span><strong id="compare-cost-before">-</strong></div>

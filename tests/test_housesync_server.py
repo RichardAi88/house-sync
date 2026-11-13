@@ -251,11 +251,16 @@ def test_http_compare_and_report_downloads_reconcile(http_application):
     assert status == 200
     report = json.loads(body)
     assert report["totals"]["after"] - report["totals"]["before"] == report["totals"]["net_change"] == 1280
-    assert {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json"} == set(report["files"])
+    assert {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json", "variation_pdf"} == set(report["files"])
     for url in report["files"].values():
         status, content, _ = request("GET", url)
         assert status == 200
         assert len(content) > 100
+    status, content, headers = request("GET", report["files"]["variation_pdf"])
+    assert status == 200
+    assert headers["Content-Type"] == "application/pdf"
+    assert content.startswith(b"%PDF-")
+    assert report["files"]["variation_pdf"].endswith("/variation-order.pdf")
     status, body, _ = request("GET", "/api/revisions")
     assert status == 200
     revisions = json.loads(body)

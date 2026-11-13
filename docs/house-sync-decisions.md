@@ -81,3 +81,8 @@ Entities: W1, W2, W3, W4, S0, R0, D1, N1, N2, ROOM1
 Each completed design transition compares the previous saved snapshot A with the new snapshot B. Reports preserve source revision IDs, settings changes, before/after quantities and rates, and signed BOQ item differences. Colour or description changes remain visible even at zero cost. The net difference equals B's subtotal minus A's subtotal; additions and omissions reconcile to that amount. Quantity and rate effects use an explicit two-step calculation, with a rounding reconciliation where needed. Unit changes are not assigned a misleading quantity/rate decomposition. Different currencies are rejected instead of assuming an exchange rate.
 
 Comparison reports are immutable, versioned by the two revisions and report source fingerprint, and retained locally. They are estimate changes for the modelled scope, not actual construction change orders: demolition, rework, abortive cost, fees, tax, time and contractual entitlement are not inferred. Failed report export is surfaced without claiming that a completed house build failed or rewriting earlier design snapshots.
+
+
+## D-014 Export a draft variation order from an explicit comparison
+
+The Changes & cost PDF action produces a separate variation-order.pdf using the selected saved revisions A and B and their reconciled BOQ differences. The document retains change descriptions even at zero cost, identifies its source revisions and a stable comparison reference, and provides contract-reference, review and approval fields. The existing comparison report remains available. Exporting a PDF does not approve or sign the order, infer contractual entitlement, or value unmodelled costs and programme impacts.

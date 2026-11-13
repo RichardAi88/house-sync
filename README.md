@@ -18,6 +18,8 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 
 Every successful update preserves the previous design and automatically creates a comparison with the new design. Open **Changes & cost** to review the last transition, or select any two saved revisions and choose **Compare revisions**. Each report identifies its two source revisions and is saved locally alongside the revision history. Reopening the application preserves these records.
 
+Select **Export variation order PDF** to download a draft variation order for the selected A-to-B comparison. It includes a VO reference, source revisions, change descriptions, itemised quantities/rates and costs, additions/omissions, the net variation and revised estimate, plus contract reference and approval/signature fields. Exporting leaves the order as a draft for review and approval; it does not approve a variation or assess programme impact.
+
 The default 10 x 8 m design has an illustrative subtotal of SGD 28,574.80. Increasing its length to 12 m at the same rates gives SGD 33,022.80, a **SGD 4,448.00 increase**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
 The comparison separates quantity effects from rate effects and reconciles them to rounded BOQ amounts. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.

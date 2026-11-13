@@ -18,7 +18,7 @@ from openpyxl.workbook.properties import CalcProperties
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 CENT = Decimal("0.01")
 ZERO = Decimal(0)
@@ -414,12 +414,116 @@ def _pdf(comparison: dict, directory: Path) -> None:
     document.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
+
+def _variation_pdf(comparison: dict, directory: Path) -> None:
+    """Prepare an unsigned variation order with the saved A-to-B estimate evidence."""
+    styles = getSampleStyleSheet()
+    for name, size, leading, bold, colour in [
+        ("VOTitle", 22, 27, True, INK),
+        ("VOHeading", 11, 15, True, TEAL),
+        ("VOBody", 9, 12, False, INK),
+        ("VOSmall", 7.5, 10, False, INK),
+        ("VOHeader", 7.5, 10, True, "FFFFFF"),
+    ]:
+        styles.add(ParagraphStyle(name=name, fontName="Helvetica-Bold" if bold else "Helvetica",
+                                  fontSize=size, leading=leading, textColor=colors.HexColor("#" + colour), spaceAfter=4))
+    paragraph = lambda value, style="VOBody": Paragraph(html.escape(str(value)), styles[style])
+    reference = f"VO-{comparison['before_revision']}-{comparison['after_revision']}"
+    width = landscape(A4)[0] - 72
+    totals = comparison["totals"]
+    currency = comparison["currency"]
+    story = [paragraph("DRAFT VARIATION ORDER", "VOTitle"),
+             paragraph("Pending contractual review and approval. All amounts are saved model estimates.", "VOSmall"), Spacer(1, 8)]
+    metadata = [
+        [f"Project: {comparison['after_label']}", f"Variation reference: {reference}"],
+        ["Contract reference: ______________________________", "Instruction reference: ______________________________"],
+        [f"Baseline A: {comparison['before_revision']} - {comparison['before_label']}",
+         f"Proposed B: {comparison['after_revision']} - {comparison['after_label']}"],
+        [f"Snapshot A: {comparison.get('before_created_at') or 'Not recorded'}",
+         f"Snapshot B: {comparison.get('after_created_at') or 'Not recorded'}"],
+    ]
+    metadata_table = Table([[paragraph(value, "VOSmall") for value in row] for row in metadata], colWidths=[width / 2] * 2)
+    metadata_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#" + PALE)),
+                                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                        ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                                        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    story.extend([metadata_table, Spacer(1, 10), paragraph(f"Estimated valuation - {currency}", "VOHeading")])
+    labels = ["Baseline estimate A", "Additions", "Omissions / credits (deduct)", "Net estimated variation", "Revised estimate B"]
+    keys = ["before", "additions", "omissions", "net_change", "after"]
+    values = [f"{totals[key]:,.2f}" if key != "net_change" else _signed(totals[key]) for key in keys]
+    valuation = Table([[paragraph(value, "VOSmall") for value in labels],
+                       [paragraph(value) for value in values]], colWidths=[width / 5] * 5)
+    valuation.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#E5F0ED")),
+                                   ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                   ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                                   ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    story.extend([valuation, Spacer(1, 11), paragraph("Description of variation", "VOHeading")])
+    for description in comparison["summary"] or ["No design, description or cost changes between the selected saved revisions."]:
+        story.append(paragraph(description))
+    story.extend([paragraph("Reason / instruction: __________________________________________________________________________________", "VOSmall"),
+                  paragraph("Programme impact: Not assessed. Agreed extension of time (if any): __________________________________________", "VOSmall"),
+                  Spacer(1, 10), paragraph("Review and authorisation", "VOHeading")])
+    approval_rows = [
+        ["Prepared by", "Contractor / valuation review", "Employer / authorised approval"],
+        ["Name: __________________________", "Name: __________________________", "Name: __________________________"],
+        ["Signature: _______________________", "Signature: _______________________", "Signature: _______________________"],
+        ["Date: ___________________________", "Date: ___________________________", "Date: ___________________________"],
+    ]
+    approval = Table([[paragraph(value, "VOSmall") for value in row] for row in approval_rows], colWidths=[width / 3] * 3)
+    approval.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + PALE)),
+                                  ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#C9D9DE")),
+                                  ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D5E0E4")),
+                                  ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                  ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                                  ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    story.append(KeepTogether([approval, Spacer(1, 8), paragraph(
+        "Exporting this draft does not issue an instruction, certify payment or record approval. Complete the contract particulars, valuation and authorisation before issue.", "VOSmall")]))
+    story.extend([PageBreak(), paragraph("VARIATION COST BREAKDOWN", "VOTitle"),
+                  paragraph(f"{reference} | {currency} | Saved revision A to saved revision B", "VOSmall"),
+                  paragraph("Affected BOQ items", "VOHeading")])
+    headers = ["Item", "Description of change", "Qty A", "Qty B", "Unit", "Rate A", "Rate B", "Amount A", "Amount B", "Cost change"]
+    rows = [[paragraph(value, "VOHeader") for value in headers]]
+    for item in comparison["items"]:
+        values = [item["code"], item["description"], _text(item["before_quantity"]), _text(item["after_quantity"]), item["unit"],
+                  _text(item["before_rate"]), _text(item["after_rate"]), f"{item['before_amount']:,.2f}",
+                  f"{item['after_amount']:,.2f}", _signed(item["cost_delta"])]
+        rows.append([paragraph(value, "VOSmall") for value in values])
+    if not comparison["items"]:
+        rows.append([paragraph("No affected BOQ items", "VOSmall")] + [""] * 9)
+    widths = [45, width - 460, 43, 43, 42, 50, 50, 61, 61, 65]
+    table = Table(rows, colWidths=widths, repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + INK)),
+                              ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + PALE)]),
+                              ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                              ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                              ("LINEBELOW", (0, 0), (-1, -1), 0.35, colors.HexColor("#D5E0E4"))]))
+    story.extend([table, Spacer(1, 10), paragraph(
+        f"Net of affected items: {_signed(totals['net_change'])} {currency}. Baseline estimate {totals['before']:,.2f} + additions {totals['additions']:,.2f} - omissions {totals['omissions']:,.2f} = revised estimate {totals['after']:,.2f} {currency}.", "VOBody"),
+        paragraph("Valuation basis and qualifications", "VOHeading")])
+    for note in comparison["notes"]:
+        story.append(paragraph(note, "VOSmall"))
+
+    def footer(canvas, document):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#53636B"))
+        canvas.drawString(30, 18, f"{reference} | DRAFT - Pending approval")
+        canvas.drawRightString(landscape(A4)[0] - 30, 18, f"Page {document.page}")
+        canvas.restoreState()
+
+    document = SimpleDocTemplate(str(directory / "variation-order.pdf"), pagesize=landscape(A4),
+                                rightMargin=30, leftMargin=30, topMargin=28, bottomMargin=34,
+                                title="Draft variation order", author="House Sync", pageCompression=0)
+    document.build(story, onFirstPage=footer, onLaterPages=footer)
+
+
 def export_change_report(comparison: dict, output_dir: Path) -> dict[str, str]:
-    """Write a matched, immutable A-to-B comparison in four portable formats."""
+    """Write the A-to-B evidence and an unsigned draft variation order."""
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     _xlsx(comparison, directory)
     _csv(comparison, directory)
     _pdf(comparison, directory)
+    _variation_pdf(comparison, directory)
     (directory / "changes.json").write_text(json.dumps(comparison, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
-    return {"changes_xlsx": "changes.xlsx", "changes_csv": "changes.csv", "changes_pdf": "changes.pdf", "changes_json": "changes.json"}
+    return {"changes_xlsx": "changes.xlsx", "changes_csv": "changes.csv", "changes_pdf": "changes.pdf", "changes_json": "changes.json", "variation_pdf": "variation-order.pdf"}

@@ -54,6 +54,7 @@ function setBusy(value) {
     $('#sync-status').classList.add('pending');
   }
   setDownloadLinks();
+  setComparisonDownloads();
 }
 
 function errorMessage(message) {
@@ -187,7 +188,7 @@ function setComparisonDownloads() {
   const matches = comparison.result && comparison.result.before_revision === pair.before && comparison.result.after_revision === pair.after;
   document.querySelectorAll('[data-change-file]').forEach(link => {
     const url = downloadURL(comparison.result?.files?.[link.dataset.changeFile]);
-    const enabled = Boolean(matches && !comparison.busy && url);
+    const enabled = Boolean(matches && !comparison.busy && !state.busy && url);
     link.classList.toggle('disabled', !enabled);
     link.setAttribute('aria-disabled', String(!enabled));
     if (enabled) { link.href = url; link.setAttribute('download', ''); link.tabIndex = 0; }

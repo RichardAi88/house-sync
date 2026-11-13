@@ -164,7 +164,7 @@ def test_invalid_or_inconsistent_snapshots_rejected(built_pair, problem):
 def test_all_report_formats_preserve_pair_changes_and_costs(tmp_path, built_pair):
     result = compare_revisions(*built_pair)
     files = export_change_report(result, tmp_path)
-    assert set(files) == {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json"}
+    assert set(files) == {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json", "variation_pdf"}
     assert all((tmp_path / path).stat().st_size > 100 for path in files.values())
     saved = json.loads((tmp_path / files["changes_json"]).read_text(encoding="utf-8"))
     assert saved["totals"]["net_change"] == 4448
@@ -196,3 +196,38 @@ def test_report_treats_arbitrary_text_as_text_and_nochange_is_exportable(tmp_pat
     assert any(cell.value == "'=1+1" and cell.data_type == "s" for cell in sheet["A"])
     export_change_report(compare_revisions(before, before), tmp_path / "unchanged")
     assert (tmp_path / "unchanged" / "changes.pdf").stat().st_size > 100
+
+
+def test_variation_order_pdf_records_scope_valuation_and_unsigned_approval(tmp_path, built_pair):
+    comparison = compare_revisions(*built_pair)
+    files = export_change_report(comparison, tmp_path)
+    pdf = (tmp_path / files["variation_pdf"]).read_bytes()
+    assert pdf.startswith(b"%PDF-")
+    for text in ("DRAFT VARIATION ORDER", "VARIATION COST BREAKDOWN", "House Sync demonstration",
+                 "VO-" + comparison["before_revision"] + "-" + comparison["after_revision"],
+                 "10,000 mm to 12,000 mm", "4,448.00", "33,022.80", "Contract reference:",
+                 "Instruction reference:", "Reason / instruction:", "Programme impact: Not assessed.",
+                 "Prepared by", "Contractor / valuation review", "Employer / authorised approval",
+                 "Signature:", "does not issue an instruction", "Pending approval"):
+        assert text.encode("ascii") in pdf
+    assert b"/Count 2" in pdf
+    assert comparison["before_revision"].encode("ascii") in pdf
+    assert comparison["after_revision"].encode("ascii") in pdf
+
+
+def test_variation_order_pdf_keeps_zero_cost_finish_and_negative_credits(tmp_path, built_pair):
+    before = built_pair[0]
+    after = deepcopy(before)
+    after["revision"] = "b" * 12
+    after["settings"].update(paint_colour="Warm white", paint_hex="#FAF9F6")
+    next(item for item in after["boq"] if item["code"] == "PAINT")["description"] = "Paint Warm white #FAF9F6"
+    comparison = compare_revisions(before, after)
+    files = export_change_report(comparison, tmp_path / "finish")
+    pdf = (tmp_path / "finish" / files["variation_pdf"]).read_bytes()
+    assert b"Warm white" in pdf
+    assert b"0.00" in pdf
+    reverse = compare_revisions(built_pair[1], before)
+    files = export_change_report(reverse, tmp_path / "credit")
+    pdf = (tmp_path / "credit" / files["variation_pdf"]).read_bytes()
+    assert b"-4,448.00" in pdf
+    assert b"Omissions / credits" in pdf
