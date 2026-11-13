@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import html
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from reportlab.lib.pagesizes import A3, A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 INK = "#173042"
 PALE = "#EAF3F7"
@@ -96,7 +97,9 @@ def _boq(result: dict[str, Any], output: Path) -> None:
                 cell.number_format = "#,##0.000"
             if col in (5, 6):
                 cell.number_format = "#,##0.00"
-        ws.row_dimensions[idx].height = 42
+        description_lines = ceil(len(str(item["description"])) / 48)
+        reference_lines = ceil(len(", ".join(item.get("element_ids", []))) / 22)
+        ws.row_dimensions[idx].height = max(42, min(300, 14 * max(description_lines, reference_lines) + 10))
     last = header_row + len(result["boq"])
     total_row = last + 2
     ws.cell(total_row, 2, "Estimated subtotal")
@@ -140,6 +143,16 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         writer.writerow(["Rates", "Illustrative assumptions. Taxes, preliminaries and unmodelled work excluded."])
 
 
+def _opening_kind(opening: dict[str, Any]) -> str:
+    """Use explicit compiled kind, retaining support for older saved snapshots."""
+    return opening.get("kind") or ("door" if opening["id"].startswith("D") else "window")
+
+
+def _opening_requirement(opening: dict[str, Any]) -> str:
+    return (f"{opening['id']} on {opening['host']}: {opening['width_mm']:,.0f} x {opening['height_mm']:,.0f} mm opening; "
+            f"sill {opening['sill_mm']:,.0f} mm; start offset {opening['start_mm']:,.0f} mm along the internal wall reference.")
+
+
 def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
     settings = _data(result)
     drawing = result["drawing"]
@@ -152,21 +165,26 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
         ("Modelled floor area", f"{result['quantities']['floor_area_m2']:,.3f} m2"),
     ]
     openings = drawing["openings"]
-    door = [o for o in openings if o["id"].startswith("D")]
-    windows = [o for o in openings if not o["id"].startswith("D")]
+    door = [o for o in openings if _opening_kind(o) == "door"]
+    windows = [o for o in openings if _opening_kind(o) == "window"]
     materials = [
         ("Floor slab", f"{drawing.get('slab_thickness_mm', 150):,.0f} mm concrete slab within the internal room footprint. Finish product to be confirmed."),
         ("Walls", f"{t:,.0f} mm uniform masonry assembly. Construction and performance requirements to be confirmed."),
         ("Flat roof", f"{drawing.get('roof_thickness_mm', 200):,.0f} mm modelled roof, overhang {drawing.get('roof_overhang_mm', 300):,.0f} mm. Waterproofing specification to be confirmed."),
         ("Paint finish", f"{settings['paint_colour']} ({settings['paint_hex']}). Manufacturer product and physical colour reference to be confirmed."),
-        ("Doors", "; ".join(f"{o['id']}: {o['width_mm']:,.0f} x {o['height_mm']:,.0f} mm opening" for o in door)),
-        ("Windows", "; ".join(f"{o['id']}: {o['width_mm']:,.0f} x {o['height_mm']:,.0f} mm opening, sill {o['sill_mm']:,.0f} mm" for o in windows)),
     ]
+    materials.extend((f"Door {opening['id']}", _opening_requirement(opening)) for opening in door)
+    materials.extend((f"Window {opening['id']}", _opening_requirement(opening)) for opening in windows)
+    if not door:
+        materials.append(("Doors", "None modelled."))
+    if not windows:
+        materials.append(("Windows", "None modelled."))
     notes = [
         "This draft technical schedule records the selected house geometry and finishes for attachment to a separately agreed contract.",
         f"The matching BOQ and drawings carry design revision {result['revision']}. The BOQ subtotal is {_money(result)} using illustrative rates.",
         _measurement(result),
         "Dimensions are in millimetres unless stated. Plan dimensions identify internal clear sizes and external wall sizes separately. Screen HEX colour is a visual reference.",
+        "Opening start offsets follow the internal reference: W1 south eastwards; W2 east northwards; W3 north westwards; W4 west southwards.",
         "Detailed construction design, foundations, services, statutory submissions, commercial terms and unlisted work require separate definition.",
     ]
     return dimensions, materials, notes
@@ -261,8 +279,8 @@ def _specification(result: dict[str, Any], output: Path) -> None:
             ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
         story.extend([table, Spacer(1, 3)])
-    story.append(Paragraph("Measurement and scope", heading))
-    story.extend(Paragraph(html.escape(note), body) for note in notes[1:])
+    story.append(KeepTogether([Paragraph("Measurement and scope", heading),
+                               *(Paragraph(html.escape(note), body) for note in notes[1:])]))
 
     def footer(pdf: Any, _document: Any) -> None:
         pdf.saveState()
@@ -331,7 +349,7 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
     rect(px + t*scale, py + t*scale, length*scale, width*scale, "#FFFFFF", INK, .7)
     for opening in d["openings"]:
         host, start, ow = opening["host"], opening["start_mm"], opening["width_mm"]
-        fill = "#FFFFFF" if opening["id"].startswith("D") else "#DCEFF7"
+        fill = "#FFFFFF" if _opening_kind(opening) == "door" else "#DCEFF7"
         if host == "W1":
             x, y, w, h = px + (t+start)*scale, py + (width+t)*scale, ow*scale, t*scale
             label_x, label_y = x + w/2, y - 8
@@ -376,11 +394,16 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
             ox = ex+(t+opening["start_mm"])*es
             oy = floor_y-(opening["sill_mm"]+opening["height_mm"])*es
             rect(ox, oy, opening["width_mm"]*es, opening["height_mm"]*es,
-                 "#E2F2F8" if not opening["id"].startswith("D") else "#F4F0E9", INK, .7)
+                 "#E2F2F8" if _opening_kind(opening) == "window" else "#F4F0E9", INK, .7)
             text(ox+opening["width_mm"]*es/2, oy-7, opening["id"], 9, anchor="middle")
+        host_openings = [opening for opening in d["openings"] if opening["host"] == host]
+        if len(host_openings) == 1:
+            opening = host_openings[0]
             text(ex+ewidth/2, floor_y+slab_t*es+46,
                  f"{opening['id']}  {opening['width_mm']:,.0f} x {opening['height_mm']:,.0f}  sill {opening['sill_mm']:,.0f}",
                  9, GREY, "middle")
+        elif host_openings:
+            text(ex+ewidth/2, floor_y+slab_t*es+46, "Opening sizes and offsets: see schedule A002", 8, GREY, "middle")
         dim_h(ex, ex+ewidth, floor_y+slab_t*es+26, floor_y+slab_t*es, f"{run+2*t:,.0f} wall overall")
         dim_v(ey+roof_t*es, floor_y, ex-30, ex, f"{height:,.0f}")
 
@@ -394,46 +417,140 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
     return page_w, page_h, primitives
 
 
+def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict[str, Any]]]]:
+    """Coordinate the main drawing, remaining elevations and a paginated opening schedule."""
+    sheets = [drawing_primitives(result)]
+    settings, d = _data(result), result["drawing"]
+    length, width, height, t = (d[key] for key in ("length_mm", "width_mm", "height_mm", "wall_thickness_mm"))
+    roof_t, slab_t = d.get("roof_thickness_mm", 200), d.get("slab_thickness_mm", 150)
+    overhang = d.get("roof_overhang_mm", 300)
+    page_w, page_h = landscape(A3)
+    openings = list(d["openings"])
+    chunks = [openings[:10]]
+    chunks.extend(openings[index:index + 24] for index in range(10, len(openings), 24))
+    for sheet_index, chunk in enumerate(chunks, 2):
+        primitives: list[dict[str, Any]] = []
+
+        def rect(x, y, w, h, fill="none", stroke=INK, line_width=1, *, _target=primitives):
+            _target.append(dict(kind="rect", x=x, y=y, w=w, h=h, fill=fill, stroke=stroke, line_width=line_width))
+
+        def line(x1, y1, x2, y2, stroke=INK, line_width=1, *, _target=primitives):
+            _target.append(dict(kind="line", x1=x1, y1=y1, x2=x2, y2=y2, stroke=stroke, line_width=line_width))
+
+        def text(x, y, value, size=10, fill=INK, anchor="start", bold=False, rotation=0, *, _target=primitives):
+            _target.append(dict(kind="text", x=x, y=y, text=str(value), size=size, fill=fill,
+                                   anchor=anchor, bold=bold, rotation=rotation))
+
+        rect(28, 28, page_w - 56, page_h - 56, "#FFFFFF", BORDER, .7)
+        text(48, 64, "Elevations and opening schedule" if sheet_index == 2 else "Opening schedule continued", 24, bold=True)
+        text(48, 88, settings["project_name"], 12)
+        text(page_w - 48, 62, f"REV {result['revision']}", 11, anchor="end", bold=True)
+        text(page_w - 48, 84, "A3 landscape | All dimensions in mm", 10, GREY, "end")
+        line(48, 108, page_w - 48, 108, BORDER, .8)
+        if sheet_index == 2:
+            for host, label, run, ex in (("W3", "04  Rear elevation facing north", length, 100),
+                                         ("W4", "05  Side elevation facing west", width, 670)):
+                text(ex - 20, 145, label, 14, bold=True)
+                es = min(420 / (run + 2*t + 2*overhang), 140 / (height + roof_t + slab_t))
+                ey = 195.0
+                ewidth, eheight = (run + 2*t)*es, height*es
+                rect(ex - overhang*es, ey, ewidth + 2*overhang*es, roof_t*es, "#D8DFE3", INK, .8)
+                rect(ex, ey + roof_t*es, ewidth, eheight, settings["paint_hex"], INK, .8)
+                floor_y = ey + (roof_t + height)*es
+                rect(ex + t*es, floor_y, run*es, slab_t*es, "#E5E8EA", INK, .8)
+                line(ex - 12, floor_y + slab_t*es, ex + ewidth + 12, floor_y + slab_t*es, GREY, .7)
+                for opening in openings:
+                    if opening["host"] != host:
+                        continue
+                    ox = ex + (t + opening["start_mm"])*es
+                    oy = floor_y - (opening["sill_mm"] + opening["height_mm"])*es
+                    rect(ox, oy, opening["width_mm"]*es, opening["height_mm"]*es,
+                         "#E2F2F8" if _opening_kind(opening) == "window" else "#F4F0E9", INK, .7)
+                    text(ox + opening["width_mm"]*es/2, oy - 7, opening["id"], 9, anchor="middle")
+                dy = floor_y + slab_t*es + 25
+                line(ex, dy, ex + ewidth, dy, GREY, .65)
+                for x in (ex, ex + ewidth):
+                    line(x, floor_y + slab_t*es, x, dy + 5, GREY, .5)
+                    line(x - 3, dy + 3, x + 3, dy - 3, GREY, .8)
+                text(ex + ewidth/2, dy - 6, f"{run + 2*t:,.0f} wall overall", 9, GREY, "middle")
+                text(ex + ewidth/2, dy + 19, f"Wall height {height:,.0f} | Opening sizes and offsets below", 9, GREY, "middle")
+        top = 430 if sheet_index == 2 else 145
+        text(68, top, "Opening schedule" + (" continued" if sheet_index > 2 else ""), 14, bold=True)
+        text(68, top + 20, "Start and end offsets use the internal clear wall line. Sizes identify modelled opening voids.", 9, GREY)
+        x0, y0, row_height = 68.0, top + 35, 22.0
+        widths = [70, 90, 130, 180, 130, 210, page_w - 136 - 810]
+        headings = ["ID", "Type", "Wall", "Opening W x H", "Sill", "Start offset", "End clearance"]
+        rows = []
+        for opening in chunk:
+            run = length if opening["host"] in {"W1", "W3"} else width
+            end = run - opening["start_mm"] - opening["width_mm"]
+            rows.append([opening["id"], _opening_kind(opening).capitalize(), opening["host"],
+                         f"{opening['width_mm']:,.0f} x {opening['height_mm']:,.0f}", f"{opening['sill_mm']:,.0f}",
+                         f"{opening['start_mm']:,.0f}", f"{end:,.0f}"])
+        if not rows:
+            rows = [["-", "None modelled", "-", "-", "-", "-", "-"]]
+        for row_index, row in enumerate([headings, *rows]):
+            x, y = x0, y0 + row_height*row_index
+            for value, cell_width in zip(row, widths, strict=True):
+                rect(x, y, cell_width, row_height, INK if row_index == 0 else PALE if row_index % 2 else "#FFFFFF", BORDER, .4)
+                text(x + 7, y + 15, value, 9, "#FFFFFF" if row_index == 0 else INK, bold=row_index == 0)
+                x += cell_width
+        text(68, 750, "Reference directions: W1 south eastwards; W2 east northwards; W3 north westwards; W4 west southwards.", 9, GREY)
+        line(48, page_h - 64, page_w - 48, page_h - 64, BORDER, .8)
+        text(48, page_h - 44, f"House Sync | Design revision {result['revision']}", 9, GREY)
+        text(page_w - 48, page_h - 44, f"Sheet A{sheet_index:03} | Draft", 9, GREY, "end")
+        sheets.append((page_w, page_h, primitives))
+    return sheets
+
+
 def _drawings(result: dict[str, Any], output: Path) -> None:
-    width, height, primitives = drawing_primitives(result)
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.2f}pt" height="{height:.2f}pt" viewBox="0 0 {width:.2f} {height:.2f}">',
+    sheets = drawing_sheets(result)
+    width = sheets[0][0]
+    svg_height = sum(sheet[1] for sheet in sheets) + 12 * (len(sheets) - 1)
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.2f}pt" height="{svg_height:.2f}pt" viewBox="0 0 {width:.2f} {svg_height:.2f}">',
            f'<title>{html.escape(_data(result)["project_name"])} drawings revision {result["revision"]}</title>',
            '<rect width="100%" height="100%" fill="white"/>']
-    pdf = canvas.Canvas(str(output / "drawings.pdf"), pagesize=(width, height))
+    pdf = canvas.Canvas(str(output / "drawings.pdf"), pagesize=sheets[0][:2])
     pdf.setTitle(f"{_data(result)['project_name']} drawings revision {result['revision']}")
     pdf.setAuthor("House Sync")
-    for p in primitives:
-        if p["kind"] == "rect":
-            svg.append(f'<rect x="{p["x"]:.3f}" y="{p["y"]:.3f}" width="{p["w"]:.3f}" height="{p["h"]:.3f}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
-            pdf.setStrokeColor(colors.HexColor(p["stroke"]))
-            pdf.setLineWidth(p["line_width"])
-            fill = p["fill"] != "none"
-            if fill:
-                pdf.setFillColor(colors.HexColor(p["fill"]))
-            pdf.rect(p["x"], height-p["y"]-p["h"], p["w"], p["h"], fill=int(fill), stroke=1)
-        elif p["kind"] == "line":
-            svg.append(f'<line x1="{p["x1"]:.3f}" y1="{p["y1"]:.3f}" x2="{p["x2"]:.3f}" y2="{p["y2"]:.3f}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
-            pdf.setStrokeColor(colors.HexColor(p["stroke"]))
-            pdf.setLineWidth(p["line_width"])
-            pdf.line(p["x1"], height-p["y1"], p["x2"], height-p["y2"])
-        else:
-            weight = "bold" if p["bold"] else "normal"
-            transform = f' transform="rotate({p["rotation"]} {p["x"]:.3f} {p["y"]:.3f})"' if p["rotation"] else ""
-            svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}>{html.escape(p["text"])}</text>')
-            pdf.setFillColor(colors.HexColor(p["fill"]))
-            pdf.setFont("Helvetica-Bold" if p["bold"] else "Helvetica", p["size"])
-            draw = {"start": pdf.drawString, "middle": pdf.drawCentredString, "end": pdf.drawRightString}[p["anchor"]]
-            if p["rotation"]:
-                pdf.saveState()
-                pdf.translate(p["x"], height-p["y"])
-                pdf.rotate(-p["rotation"])
-                draw(0, 0, p["text"])
-                pdf.restoreState()
+    offset_y = 0.0
+    for width, height, primitives in sheets:
+        svg.append(f'<g transform="translate(0 {offset_y:.3f})">')
+        pdf.setPageSize((width, height))
+        for p in primitives:
+            if p["kind"] == "rect":
+                svg.append(f'<rect x="{p["x"]:.3f}" y="{p["y"]:.3f}" width="{p["w"]:.3f}" height="{p["h"]:.3f}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+                pdf.setStrokeColor(colors.HexColor(p["stroke"]))
+                pdf.setLineWidth(p["line_width"])
+                fill = p["fill"] != "none"
+                if fill:
+                    pdf.setFillColor(colors.HexColor(p["fill"]))
+                pdf.rect(p["x"], height-p["y"]-p["h"], p["w"], p["h"], fill=int(fill), stroke=1)
+            elif p["kind"] == "line":
+                svg.append(f'<line x1="{p["x1"]:.3f}" y1="{p["y1"]:.3f}" x2="{p["x2"]:.3f}" y2="{p["y2"]:.3f}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+                pdf.setStrokeColor(colors.HexColor(p["stroke"]))
+                pdf.setLineWidth(p["line_width"])
+                pdf.line(p["x1"], height-p["y1"], p["x2"], height-p["y2"])
             else:
-                draw(p["x"], height-p["y"], p["text"])
+                weight = "bold" if p["bold"] else "normal"
+                transform = f' transform="rotate({p["rotation"]} {p["x"]:.3f} {p["y"]:.3f})"' if p["rotation"] else ""
+                svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}>{html.escape(p["text"])}</text>')
+                pdf.setFillColor(colors.HexColor(p["fill"]))
+                pdf.setFont("Helvetica-Bold" if p["bold"] else "Helvetica", p["size"])
+                draw = {"start": pdf.drawString, "middle": pdf.drawCentredString, "end": pdf.drawRightString}[p["anchor"]]
+                if p["rotation"]:
+                    pdf.saveState()
+                    pdf.translate(p["x"], height-p["y"])
+                    pdf.rotate(-p["rotation"])
+                    draw(0, 0, p["text"])
+                    pdf.restoreState()
+                else:
+                    draw(p["x"], height-p["y"], p["text"])
+        svg.append("</g>")
+        offset_y += height + 12
+        pdf.showPage()
     svg.append("</svg>")
     (output / "drawings.svg").write_text("\n".join(svg), encoding="utf-8")
-    pdf.showPage()
     pdf.save()
 
 

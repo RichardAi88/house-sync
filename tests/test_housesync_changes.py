@@ -231,3 +231,90 @@ def test_variation_order_pdf_keeps_zero_cost_finish_and_negative_credits(tmp_pat
     pdf = (tmp_path / "credit" / files["variation_pdf"]).read_bytes()
     assert b"-4,448.00" in pdf
     assert b"Omissions / credits" in pdf
+
+
+
+def explicit_openings():
+    return [
+        {"id": "D1", "kind": "door", "host": "W1", "offset_mm": None, "width_mm": 1000, "height_mm": 2100, "sill_mm": 0},
+        {"id": "N1", "kind": "window", "host": "W3", "offset_mm": None, "width_mm": 1500, "height_mm": 1200, "sill_mm": 900},
+        {"id": "N2", "kind": "window", "host": "W2", "offset_mm": None, "width_mm": 1500, "height_mm": 1200, "sill_mm": 900},
+    ]
+
+
+def test_opening_defaults_migrate_without_inventing_changes_and_order_is_irrelevant(built_pair):
+    historical = deepcopy(built_pair[0])
+    historical["settings"].pop("openings", None)
+    explicit = deepcopy(historical)
+    explicit["revision"] = "b" * 12
+    explicit["settings"]["openings"] = list(reversed(explicit_openings()))
+    comparison = compare_revisions(historical, explicit)
+    assert comparison["setting_changes"] == []
+    assert comparison["items"] == []
+    assert not comparison["has_changes"]
+
+
+def test_opening_moves_are_described_by_stable_id_even_with_zero_cost(tmp_path, built_pair):
+    before, after = deepcopy(built_pair[0]), deepcopy(built_pair[0])
+    before["settings"]["openings"] = explicit_openings()
+    after["revision"] = "b" * 12
+    after["settings"]["openings"] = explicit_openings()
+    after["settings"]["openings"][1].update(host="W4", offset_mm=500)
+    comparison = compare_revisions(before, after)
+    descriptions = " ".join(comparison["summary"])
+    assert "Window N1 host wall: W3 (north, westwards) to W4 (west, southwards)." in descriptions
+    assert "Window N1 position: centred (4,250 mm start) to 500 mm start" in descriptions
+    assert [change["field"] for change in comparison["setting_changes"]] == ["openings.N1.host", "openings.N1.offset_mm"]
+    assert all(change["element_id"] == "N1" for change in comparison["setting_changes"])
+    assert comparison["totals"]["net_change"] == 0
+    assert comparison["has_changes"]
+    assert comparison["items"] == []
+    files = export_change_report(comparison, tmp_path)
+    pdf = (tmp_path / files["variation_pdf"]).read_bytes()
+    assert b"Window N1 host wall" in pdf
+    assert b"Window N1 position" in pdf
+    assert b"500 mm start" in pdf
+
+
+def test_opening_add_remove_and_resize_descriptions_are_readable_and_deterministic(built_pair):
+    before, after = deepcopy(built_pair[0]), deepcopy(built_pair[0])
+    before["settings"]["openings"] = explicit_openings()
+    after["revision"] = "b" * 12
+    after["settings"]["openings"] = [
+        {"id": "N10", "kind": "window", "host": "W4", "offset_mm": 1000, "width_mm": 1500, "height_mm": 1200, "sill_mm": 900},
+        explicit_openings()[2],
+        {**explicit_openings()[0], "width_mm": 1100, "height_mm": 2200},
+    ]
+    comparison = compare_revisions(before, after)
+    descriptions = comparison["summary"]
+    assert descriptions[0] == "Door D1 width: 1,000 mm to 1,100 mm."
+    assert descriptions[1] == "Door D1 height: 2,100 mm to 2,200 mm."
+    assert any(text.startswith("Removed Window N1 on W3") for text in descriptions)
+    assert any(text.startswith("Added Window N10 on W4") for text in descriptions)
+    assert not any(text.startswith("Openings:") for text in descriptions)
+    assert comparison == compare_revisions(before, {**after, "settings": {**after["settings"], "openings": list(reversed(after["settings"]["openings"]))}})
+
+
+def test_centred_openings_record_automatic_repositioning_after_host_resize(built_pair):
+    comparison = compare_revisions(*built_pair)
+    positions = {change["element_id"]: change for change in comparison["setting_changes"] if change.get("element_id")}
+    assert positions["D1"]["before_start_mm"] == 4500
+    assert positions["D1"]["after_start_mm"] == 5500
+    assert positions["N1"]["before_start_mm"] == 4250
+    assert positions["N1"]["after_start_mm"] == 5250
+    assert "N2" not in positions
+
+
+def test_real_opening_resize_reconciles_geometry_cost_and_description(tmp_path, built_pair):
+    from housesync.engine import build_house
+    from housesync.schema import HouseSettings
+
+    settings = HouseSettings().model_dump(mode="json")
+    settings["openings"] = explicit_openings()
+    settings["openings"][1]["width_mm"] = 1000
+    after = build_house(HouseSettings.model_validate(settings), tmp_path / "resized")
+    comparison = compare_revisions(built_pair[0], after)
+    assert after["quantities"]["wall_volume_m3"] == pytest.approx(built_pair[0]["quantities"]["wall_volume_m3"] + 0.12)
+    assert comparison["totals"]["net_change"] == 50.4
+    assert any(text == "Window N1 width: 1,500 mm to 1,000 mm." for text in comparison["summary"])
+    assert {item["code"]: item["cost_delta"] for item in comparison["items"] if item["cost_delta"]} == {"WALL": 36, "PAINT": 14.4}

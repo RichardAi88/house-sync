@@ -1,9 +1,19 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
+import { PlanEditor } from './plan-editor.js';
 
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
 const state = { result: null, dirty: false, busy: false, selected: null, settingsURL: null };
+let planEditor = null;
+const legacyOpenings = () => [
+  { id: 'D1', kind: 'door', host: 'W1', offset_mm: null, width_mm: 1000, height_mm: 2100, sill_mm: 0 },
+  { id: 'N1', kind: 'window', host: 'W3', offset_mm: null, width_mm: 1500, height_mm: 1200, sill_mm: 900 },
+  { id: 'N2', kind: 'window', host: 'W2', offset_mm: null, width_mm: 1500, height_mm: 1200, sill_mm: 900 },
+];
+let draftOpenings = legacyOpenings();
+const stableSettings = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+const comparableSettings = settings => ({ ...settings, openings: settings.openings ?? legacyOpenings() });
 const comparison = { revisions: [], result: null, busy: false, request: 0, refresh: 0, selection: 0 };
 const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#currency', '#rate-floor', '#rate-wall', '#rate-roof', '#rate-paint', '#rate-opening'];
 const rateFields = { floor_m2: '#rate-floor', wall_m3: '#rate-wall', roof_m2: '#rate-roof', paint_m2: '#rate-paint', opening_each: '#rate-opening' };
@@ -12,10 +22,11 @@ const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefine
 const money = (value, currency = 'SGD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), currency: $('#currency').value, rates: Object.fromEntries(Object.entries(rateFields).map(([key, id]) => [key, Number($(id).value)])) };
+  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), currency: $('#currency').value, rates: Object.fromEntries(Object.entries(rateFields).map(([key, id]) => [key, Number($(id).value)])), openings: structuredClone(draftOpenings) };
 }
 
 function fillForm(settings) {
+  draftOpenings = structuredClone(settings.openings ?? legacyOpenings());
   if (settings.currency && ![...$('#currency').options].some(option => option.value === settings.currency)) {
     const option = document.createElement('option'); option.value = settings.currency; option.textContent = settings.currency; $('#currency').append(option);
   }
@@ -33,17 +44,22 @@ function updateSwatches() {
   });
 }
 
-function setDirty() {
-  state.dirty = true;
-  $('#sync-status').textContent = 'Changes ready to update';
-  $('#sync-status').classList.add('pending');
-  $('#form-status').textContent = 'Update to regenerate the model and all documents.';
+function setDirty(syncPlan = true) {
+  const settings = settingsFromForm();
+  if (syncPlan) planEditor?.setDraft(settings);
+  state.dirty = !state.result || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
+  $('#sync-status').textContent = state.dirty ? 'Draft plan · update to coordinate outputs' : 'Model & documents in sync';
+  $('#sync-status').classList.toggle('pending', state.dirty);
+  $('#form-status').textContent = state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
   setDownloadLinks();
-  $('#comparison-draft-note').hidden = false;
+  $('#comparison-draft-note').hidden = !state.dirty;
 }
 
 function setBusy(value) {
   state.busy = value;
+  form.querySelectorAll('input, select, button').forEach(element => { element.disabled = value; });
+  $('#load-settings').disabled = value;
+  planEditor?.setBusy(value);
   document.body.classList.toggle('busy', value);
   $('#build-button').disabled = value;
   $('#build-label').textContent = value ? 'Updating house & documents…' : 'Update house & documents';
@@ -89,6 +105,8 @@ function resultReceived(result, populate = false) {
   state.result = result;
   state.dirty = false;
   if (populate) fillForm(result.settings);
+  if (populate) planEditor?.setDraft(settingsFromForm(), { resetHistory: true });
+  planEditor?.setBaseline(result.settings, result.revision);
   $('#project-title').textContent = result.settings.project_name;
   $('#revision-label').textContent = `Revision ${result.revision}`;
   $('#sync-status').textContent = 'Model & documents in sync';
@@ -151,8 +169,8 @@ function renderSpec(result) {
   section('01 · Scope & setting out', [`Single-storey rectangular house with clear internal dimensions of ${number(settings.length_mm, 0)} × ${number(settings.width_mm, 0)} mm. Wall height ${number(settings.height_mm, 0)} mm; wall thickness ${number(settings.wall_thickness_mm, 0)} mm.`, 'Refer to the coordinated floor plan and elevations for element locations and overall dimensions.']);
   const finish = section('02 · Wall finish', [`Selected paint: ${settings.paint_colour}. Colour reference ${settings.paint_hex}. Apply the coordinated finish to the internal and external wall faces identified by this model.`, 'Confirm the manufacturer, product, substrate preparation, primer and coating system before construction.']);
   const colour = document.createElement('span'); colour.className = 'spec-colour'; colour.style.backgroundColor = settings.paint_hex; finish.querySelector('p').prepend(colour);
-  const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
-  section('03 · Openings', openingDescriptions.length ? openingDescriptions : ['One entrance door and two windows are shown in the concept model. Refer to the drawing schedule for sizes.']);
+  const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high; start ${number(opening.start_mm, 0)} mm from the host inner reference${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
+  section('03 · Openings', openingDescriptions.length ? openingDescriptions : ['No doors or windows are included in this saved revision.']);
   section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use editable illustrative allowances in ${settings.currency}; they do not represent a complete tender estimate. All issued files should retain design revision ${result.revision}.`]);
 }
 
@@ -361,6 +379,8 @@ async function fetchJSON(url, options = {}) {
 async function buildHouse(event) {
   event?.preventDefault();
   if (state.busy || !form.reportValidity()) return;
+  const planIssues = planEditor?.audit() || [];
+  if (planIssues.length) { errorMessage('Plan needs attention: ' + planIssues.join(' ')); showView('plan'); return; }
   errorMessage('');
   const submitted = settingsFromForm();
   setBusy(true);
@@ -478,10 +498,13 @@ $('#compare-button').addEventListener('click', compareSavedRevisions);
 document.querySelectorAll('[data-change-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
 fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); setDirty(); }));
 document.querySelectorAll('.paint-swatch').forEach(button => button.addEventListener('click', () => { $('#paint-hex').value = button.dataset.colour; $('#paint-colour').value = button.dataset.name; updateSwatches(); setDirty(); }));
-document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => {
-  document.querySelectorAll('.view-tab').forEach(tab => { const active = tab === button; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
-  document.querySelectorAll('.view-panel').forEach(panel => { panel.hidden = panel.id !== `panel-${button.dataset.panel}`; });
-}));
+function showView(name) {
+  document.querySelectorAll('.view-tab').forEach(tab => { const active = tab.dataset.panel === name; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
+  document.querySelectorAll('.view-panel').forEach(panel => { panel.hidden = panel.id !== 'panel-' + name; });
+  if (name === 'plan') planEditor?.focus();
+}
+document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => showView(button.dataset.panel)));
+
 document.querySelectorAll('[data-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
 $('#roof-toggle').addEventListener('change', roofVisibility);
 $('#reset-camera').addEventListener('click', resetCamera);
@@ -498,7 +521,8 @@ $('#load-settings').addEventListener('change', async event => {
     if (file.size > 100000) throw new Error('Please choose a House Sync design JSON smaller than 100 KB.');
     const parsed = JSON.parse(await file.text()); const settings = parsed.settings || parsed;
     if (!settings.project_name || !Number.isFinite(settings.length_mm) || !Number.isFinite(settings.width_mm) || !Number.isFinite(settings.height_mm) || !Number.isFinite(settings.wall_thickness_mm) || !/^#[0-9a-f]{6}$/i.test(settings.paint_hex)) throw new Error('This file is missing valid house dimensions or a paint colour.');
-    fillForm(settings); setDirty(); errorMessage(''); $('#form-status').textContent = 'Design loaded. Update to generate its model and documents.';
+    if (settings.openings !== undefined && !Array.isArray(settings.openings)) throw new Error('Opening data must be an array of doors/windows.');
+    fillForm(settings); setDirty(); errorMessage(''); $('#form-status').textContent = 'Design loaded. Review the plan and update to generate its model and documents.';
   } catch (error) { errorMessage(error.message); }
   event.target.value = '';
 });
@@ -508,6 +532,12 @@ function initialFormLoading(value) {
   $('#load-settings').disabled = value;
 }
 
+planEditor = new PlanEditor($('#plan-editor'), {
+  onChange(settings) { if (state.busy) return; fillForm(settings); setDirty(false); },
+  onApply() { void buildHouse(); },
+  onReviewSaved() { showView('changes'); },
+});
+planEditor.setDraft(settingsFromForm(), { resetHistory: true });
 initialFormLoading(true);
 initializeViewer();
 setBusy(true);

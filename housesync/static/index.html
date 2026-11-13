@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#123b3b">
   <title>House Sync — Design and documents in step</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/plan-editor.css">
   <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
   <script type="module" src="/app.js"></script>
 </head>
@@ -17,15 +18,15 @@
   </header>
   <main class="app-layout">
     <aside class="sidebar">
-      <div class="sidebar-heading"><span class="eyebrow">YOUR PROJECT</span><h1>Make it your home.</h1><p>Adjust the house. Keep the details in step.</p></div>
+      <div class="sidebar-heading"><span class="eyebrow">YOUR PROJECT</span><h1>Make it your home.</h1><p>Edit from the plan. Keep every output in step.</p></div>
       <form id="house-form">
         <label class="field">Project name<input id="project-name" name="project_name" maxlength="120" value="My first house" required></label>
         <div class="section-heading"><h2>Dimensions</h2><span>metres</span></div>
         <div class="field-grid">
-          <label class="field">Internal length<div class="input-unit"><input id="length" type="number" min="3" max="30" step="0.1" value="10" required><span>m</span></div></label>
-          <label class="field">Internal width<div class="input-unit"><input id="width" type="number" min="3" max="30" step="0.1" value="8" required><span>m</span></div></label>
-          <label class="field">Wall height<div class="input-unit"><input id="height" type="number" min="2.4" max="5" step="0.1" value="3" required><span>m</span></div></label>
-          <label class="field">Wall thickness<div class="input-unit"><input id="thickness" type="number" min="0.1" max="0.5" step="0.01" value="0.2" required><span>m</span></div></label>
+          <label class="field">Internal length<div class="input-unit"><input id="length" type="number" min="3" max="30" step="0.001" value="10" required><span>m</span></div></label>
+          <label class="field">Internal width<div class="input-unit"><input id="width" type="number" min="3" max="30" step="0.001" value="8" required><span>m</span></div></label>
+          <label class="field">Wall height<div class="input-unit"><input id="height" type="number" min="2.4" max="5" step="0.001" value="3" required><span>m</span></div></label>
+          <label class="field">Wall thickness<div class="input-unit"><input id="thickness" type="number" min="0.1" max="0.5" step="0.001" value="0.2" required><span>m</span></div></label>
         </div>
         <p class="field-note">Room dimensions are clear internal sizes. Overall dimensions include the walls.</p>
         <div class="section-heading"><h2>Wall finish</h2><span>inside &amp; outside</span></div>
@@ -57,20 +58,22 @@
     <section class="workspace" aria-label="House design workspace">
       <div class="workspace-heading"><div><span class="eyebrow">DESIGN WORKSPACE</span><h2 id="project-title">My first house</h2></div><span id="sync-status" class="sync-badge">Building your first design</span></div>
       <nav class="view-tabs" aria-label="Project views" role="tablist">
-        <button class="view-tab active" id="tab-model" data-panel="model" role="tab" aria-selected="true" aria-controls="panel-model">3D model</button>
+        <button class="view-tab active" id="tab-plan" data-panel="plan" role="tab" aria-selected="true" aria-controls="panel-plan">Plan editor</button>
+        <button class="view-tab" id="tab-model" data-panel="model" role="tab" aria-selected="false" aria-controls="panel-model">3D model</button>
         <button class="view-tab" id="tab-drawings" data-panel="drawings" role="tab" aria-selected="false" aria-controls="panel-drawings">Drawings</button>
         <button class="view-tab" id="tab-boq" data-panel="boq" role="tab" aria-selected="false" aria-controls="panel-boq">Bill of quantities</button>
         <button class="view-tab" id="tab-spec" data-panel="spec" role="tab" aria-selected="false" aria-controls="panel-spec">Specification</button>
         <button class="view-tab" id="tab-changes" data-panel="changes" role="tab" aria-selected="false" aria-controls="panel-changes">Changes &amp; cost <span id="change-ready-dot" class="change-ready-dot" hidden></span></button>
       </nav>
-      <div id="panel-model" class="view-panel model-panel" role="tabpanel" aria-labelledby="tab-model">
+      <div id="panel-plan" class="view-panel plan-panel" role="tabpanel" aria-labelledby="tab-plan"><div id="plan-editor"></div></div>
+      <div id="panel-model" class="view-panel model-panel" role="tabpanel" aria-labelledby="tab-model" hidden>
         <div class="viewport-toolbar"><span id="selected-element" class="element-label">Select an element to inspect</span><div class="viewport-controls"><label><input id="roof-toggle" type="checkbox"> Show roof</label><button id="reset-camera" type="button" title="Reset camera" aria-label="Reset camera">↺</button></div></div>
         <div id="viewport" aria-label="Interactive 3D house model"></div>
         <div id="viewer-message" class="viewer-message">Preparing your house model…</div>
         <div class="viewport-hint"><span>Drag to orbit</span><span>Scroll to zoom</span><span>Right-drag to pan</span></div>
         <div class="model-corner-label">SINGLE-STOREY CONCEPT <span id="model-dimensions">10.0 × 8.0 m clear</span></div>
       </div>
-      <div id="panel-drawings" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-drawings" hidden><div class="document-heading"><div><h3>Plans &amp; elevations</h3><p>Dimensioned from the same house revision.</p></div><a data-file="drawings_pdf" class="secondary-button disabled" aria-disabled="true">Download PDF ↓</a></div><div class="drawing-sheet"><img id="drawing-preview" alt="Dimensioned floor plan, front elevation and side elevation of the current house"></div></div>
+      <div id="panel-drawings" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-drawings" hidden><div class="document-heading"><div><h3>Plans &amp; elevations</h3><p>Dimensioned from the same house revision.</p></div><a data-file="drawings_pdf" class="secondary-button disabled" aria-disabled="true">Download PDF ↓</a></div><div class="drawing-sheet"><img id="drawing-preview" alt="Dimensioned floor plan, all four elevations and opening schedule of the current house"></div></div>
       <div id="panel-boq" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-boq" hidden><div class="document-heading"><div><h3>Bill of quantities</h3><p>Measured quantities with editable illustrative rates.</p></div><a data-file="boq_xlsx" class="secondary-button disabled" aria-disabled="true">Download Excel ↓</a></div><div class="table-scroll"><table class="boq-table"><thead><tr><th>Item</th><th>Description</th><th>Quantity</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead><tbody id="boq-body"></tbody><tfoot><tr><th colspan="5">Illustrative subtotal</th><td id="boq-total">—</td></tr></tfoot></table></div><p id="measurement-note" class="document-note"></p></div>
       <div id="panel-spec" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-spec" hidden><div class="document-heading"><div><h3>Project specification</h3><p>A coordinated technical schedule for your contract documents.</p></div><a data-file="specification_docx" class="secondary-button disabled" aria-disabled="true">Download Word ↓</a></div><article class="spec-sheet"><div class="spec-document-label">DRAFT · CONCEPT DESIGN</div><h3 id="spec-title">My first house</h3><p id="spec-revision" class="spec-revision"></p><div id="spec-content"></div><p class="spec-disclaimer">This draft describes the current concept and selected finishes. Complete construction details, engineering design, statutory requirements, and contract terms require project-specific development and review.</p></article></div>
       <div id="panel-changes" class="view-panel document-panel changes-panel" role="tabpanel" aria-labelledby="tab-changes" hidden>

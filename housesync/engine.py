@@ -93,9 +93,19 @@ def _house(settings: HouseSettings) -> House:
         east = Wall("W2", (length, 0), (length, width), assembly=assembly, level=ground)
         north = Wall("W3", (length + thickness, width), (-thickness, width), assembly=assembly, level=ground)
         west = Wall("W4", (0, width), (0, 0), assembly=assembly, level=ground)
-        Door("D1", host=south, width=1000, height=2100, at="center", frame=frame, leaf=leaf, glazing=glass)
-        Window("N1", host=north, width=1500, height=1200, sill=900, at="center", frame=frame, glazing=glass)
-        Window("N2", host=east, width=1500, height=1200, sill=900, at="center", frame=frame, glazing=glass)
+        hosts = {"W1": south, "W2": east, "W3": north, "W4": west}
+        for opening in settings.openings:
+            span = length if opening.host in {"W1", "W3"} else width
+            start = (span - opening.width_mm) / 2 if opening.offset_mm is None else opening.offset_mm
+            # The north/south compiler paths own corner returns. Browser inputs
+            # measure from the inner room corner, so translate by one thickness.
+            position = start + (thickness if opening.host in {"W1", "W3"} else 0)
+            params = dict(host=hosts[opening.host], width=opening.width_mm, height=opening.height_mm,
+                          sill=opening.sill_mm, at=position, frame=frame, glazing=glass)
+            if opening.kind == "door":
+                Door(opening.id, **params, leaf=leaf)
+            else:
+                Window(opening.id, **params)
         room_outline = [(0, 0), (length, 0), (length, width), (0, width)]
         Slab("S0", outline=room_outline, thickness=SLAB_THICKNESS_MM, level=ground, material=floor)
         Roof(
@@ -127,13 +137,29 @@ def _quantities(ir: IRDocument) -> dict[str, float | int]:
 
 
 def _boq(settings: HouseSettings, quantities: dict[str, Any]) -> list[dict[str, Any]]:
+    def opening_description(kind: str) -> tuple[str, list[str]]:
+        openings = sorted((opening for opening in settings.openings if opening.kind == kind), key=lambda opening: opening.id)
+        default_size = (1000, 2100) if kind == "door" else (1500, 1200)
+        # Keep earlier snapshots comparable: changing the exporter vocabulary
+        # must not manufacture a zero-cost variation for an unchanged design.
+        if openings and all((opening.width_mm, opening.height_mm) == default_size for opening in openings):
+            legacy = ("1000 x 2100 mm door; shared illustrative opening allowance" if kind == "door"
+                      else "1500 x 1200 mm windows; shared illustrative opening allowance")
+            return legacy, [opening.id for opening in openings]
+        details = "; ".join(f"{opening.id}: {opening.width_mm:g} x {opening.height_mm:g} mm" for opening in openings)
+        if len(openings) > 4:
+            details = f"{len(openings)} {kind}s; individual sizes, hosts and offsets are in the coordinated opening schedule"
+        return f"{details or ('No ' + kind + 's modelled')}; shared illustrative opening allowance", [opening.id for opening in openings]
+
+    door_description, door_ids = opening_description("door")
+    window_description, window_ids = opening_description("window")
     definitions = [
         ("FLOOR", "150 mm floor slab within clear internal room footprint", "floor_area_m2", "m2", "floor_m2", ["S0"]),
         ("WALL", f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings", "wall_volume_m3", "m3", "wall_m3", ["W1", "W2", "W3", "W4"]),
         ("ROOF", "200 mm flat roof including 300 mm overhang", "roof_area_m2", "m2", "roof_m2", ["R0"]),
         ("PAINT", f"Wall paint - {settings.paint_colour} ({settings.paint_hex}); internal and external net faces", "paint_area_m2", "m2", "paint_m2", ["W1", "W2", "W3", "W4"]),
-        ("DOOR", "1000 x 2100 mm door; shared illustrative opening allowance", "door_count", "each", "opening_each", ["D1"]),
-        ("WINDOW", "1500 x 1200 mm windows; shared illustrative opening allowance", "window_count", "each", "opening_each", ["N1", "N2"]),
+        ("DOOR", door_description, "door_count", "each", "opening_each", door_ids),
+        ("WINDOW", window_description, "window_count", "each", "opening_each", window_ids),
     ]
     rows = []
     for code, description, quantity_key, unit, rate_key, element_ids in definitions:
@@ -171,7 +197,7 @@ def _drawing(ir: IRDocument) -> dict[str, Any]:
     for entity in ir.tagged("opening"):
         geometry = entity.derived_as(OpeningGeometry)
         openings.append({
-            "id": entity.id, "host": geometry.host,
+            "id": entity.id, "kind": entity.kind, "host": geometry.host,
             "start_mm": geometry.from_start - (wall.thickness if geometry.host in {"W1", "W3"} else 0),
             "width_mm": geometry.width, "height_mm": geometry.height, "sill_mm": geometry.sill,
         })

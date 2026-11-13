@@ -6,13 +6,26 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 
 ## First version
 
-- A single-storey, single-room rectangular shell with a flat roof, one door, and two windows.
+- A single-storey, single-room rectangular shell with a flat roof; one door and two windows by default.
 - Editable clear internal length/width, wall height/thickness, paint name/colour, currency, and five illustrative unit rates.
+- A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
 - BOQ in Excel/CSV; technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
+
+## Edit directly from the plan
+
+The **Plan editor** is the main workspace. Plan measurements and opening positions are in millimetres; the sidebar dimensions are in metres.
+
+1. Select a wall or dimension to enter exact sizes, or drag the north/east shell grips. The rectangular shell stays square and its south-west datum stays fixed.
+2. Select a door/window to drag it along its host wall or edit its start, size, sill and host in the inspector. Use the door/window tools to add openings and delete a selected opening to remove it.
+3. Use the snap grid for precise placement, pan/zoom or fit the plan, and undo/redo draft edits. A centred opening follows the wall centre until you give it a fixed start position.
+4. Review the draft changes and resolve the geometry checks. Openings need 100 mm from wall ends, a 100 mm head clearance, and a 100 mm gap from another opening on the same wall. These are application constraints, not a building-code assessment.
+5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. The **Changes & cost** tab then provides the variation order PDF.
+
+Draft plan edits do not issue documents. Downloads of the current document set remain disabled until a successful update; a failed validation/build preserves the preceding saved revision. The editor currently supports the rectangular exterior shell and hosted doors/windows. Arbitrary wall segments, internal partitions and multiple rooms require a further model expansion.
 
 ## Capture a change from A to B
 
@@ -67,14 +80,21 @@ This is a concept application. The BOQ covers modelled items and illustrative ra
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py -q
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py -q
 .venv\Scripts\ruff.exe check housesync
 node --check housesync/static/app.js
+node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs
 ~~~
 
 Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Linux/macOS use build123d 0.11, preserving the advanced geometry API and Python 3.13 compatibility used by the upstream test suite.
 
 The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
+
+## Plan editing audit evidence
+
+The edited-shell audit fixture compiled with zero clashes and 28 passing upstream checks. Its glazing ratio was 5.6% against the upstream project's 10% guideline, which remains an unresolved concept finding. It is not represented as a statutory requirement. The optional Blender dressed-scene audit was attempted but could not run because Blender is unavailable; furniture/circulation and building-code compliance are not certified by the editor's geometry checks.
+
+The desktop browser automation connection was unavailable during this verification. Pure plan editing tests, API/build/export tests and visual checks of the generated drawing/specification PDFs provide the recorded verification; a live pointer interaction review remains to be completed on the PC.
 
 ## Licence
 

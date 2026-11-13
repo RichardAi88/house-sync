@@ -6,17 +6,17 @@ The project starts from [homespec](https://github.com/maccman/homespec), an MIT-
 
 ## Current first version
 
-The demonstration is a single rectangular room shell, rather than a complete designed house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
+The demonstration is a single rectangular room shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
 
 | Element | Current scope |
 | --- | --- |
 | Walls | Four uniform masonry walls, with one shared paint selection |
 | Floor | 150 mm slab within the clear internal room footprint |
 | Roof | 200 mm flat roof with 300 mm overhang beyond the external wall faces |
-| Door | One centred south opening, 1,000 x 2,100 mm |
-| Windows | Two centred north/east openings, each 1,500 x 1,200 mm with 900 mm sill height |
-| Editable settings | Project name, internal length/width, wall height/thickness, paint name/HEX, currency, and five unit rates |
-| Browser model | Model view, element selection, and parameter-based updates |
+| Doors | Editable hosted openings; default D1 is centred on the south wall, 1,000 x 2,100 mm |
+| Windows | Editable hosted openings; defaults N1/N2 are centred north/east, 1,500 x 1,200 mm with 900 mm sill |
+| Editable settings | House dimensions, finish, rates, plus stable-ID doors/windows with host, start, width, height and sill |
+| Plan and browser model | Direct constrained plan edits, snapping, undo/redo and draft review; compiled 3D view |
 | BOQ | Six priced items exported to Excel and CSV |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
 | Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
@@ -62,13 +62,14 @@ The DOCX package and contents passed structural tests. Visual DOCX rendering was
 
 | Milestone | Intended result |
 | --- | --- |
-| Editable openings | Add, remove, resize, and move doors/windows within validated hosts |
+| Implemented: editable openings | Add, remove, resize and move stable-ID doors/windows within validated hosts |
 | Multiple rooms | Internal partitions, room boundaries, room schedules, and reliable junction quantities |
 | Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
 | Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
 | Project rates | Separate item rates, supplier quotations, location/currency context, taxes, waste, and revision dates |
-| Advanced editing | Direct model/plan editing with constraints, undo/redo, and change summaries |
-| Document controls | Configurable templates, approval states, issue registers, and revision comparisons |
+| Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
+| Further CAD editing | Arbitrary wall segments, reliable junctions, partitions and multiple rooms |
+| Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |
 | Deployment | Evaluate an authenticated hosted service after the local workflow is reliable |
 
 ## Engineering and contractual limits

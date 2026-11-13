@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,97 @@ def _flat(settings: dict, prefix: str = "") -> dict[str, Any]:
     return flattened
 
 
+
+LEGACY_OPENINGS = (
+    {"id": "D1", "kind": "door", "host": "W1", "offset_mm": None, "width_mm": 1000, "height_mm": 2100, "sill_mm": 0},
+    {"id": "N1", "kind": "window", "host": "W3", "offset_mm": None, "width_mm": 1500, "height_mm": 1200, "sill_mm": 900},
+    {"id": "N2", "kind": "window", "host": "W2", "offset_mm": None, "width_mm": 1500, "height_mm": 1200, "sill_mm": 900},
+)
+WALL_LABELS = {"W1": "south, eastwards", "W2": "east, northwards", "W3": "north, westwards", "W4": "west, southwards"}
+
+
+def _openings(settings: dict) -> dict[str, dict]:
+    """Normalise historical implicit openings without changing saved snapshots."""
+    source = settings.get("openings", LEGACY_OPENINGS)
+    if not isinstance(source, (list, tuple)) or len(source) > 40:
+        raise ValueError("Saved openings must be a list of at most 40 elements")
+    result = {}
+    for opening in source:
+        if not isinstance(opening, dict) or not isinstance(opening.get("id"), str) or not re.fullmatch(r"[DN][1-9][0-9]{0,2}", opening["id"]):
+            raise ValueError("Saved openings require valid stable D/N element IDs")
+        identity = opening["id"]
+        if identity in result:
+            raise ValueError(f"Saved openings have duplicate element ID {identity}")
+        if opening.get("kind") not in {"door", "window"} or opening.get("host") not in WALL_LABELS:
+            raise ValueError(f"Saved opening {identity} has an invalid kind or host")
+        for field in ("width_mm", "height_mm", "sill_mm"):
+            number = _decimal(opening.get(field), f"Saved opening {identity} {field}")
+            if field != "sill_mm" and number <= 0:
+                raise ValueError(f"Saved opening {identity} must have positive dimensions")
+        if opening.get("offset_mm") is not None:
+            _decimal(opening["offset_mm"], f"Saved opening {identity} offset_mm")
+        result[identity] = {**opening, "offset_mm": opening.get("offset_mm")}
+    return result
+
+
+def _opening_start(settings: dict, opening: dict) -> float | None:
+    if opening["offset_mm"] is not None:
+        return opening["offset_mm"]
+    span = settings.get("length_mm" if opening["host"] in {"W1", "W3"} else "width_mm")
+    if span is None:
+        return None
+    return float((_decimal(span, "Saved wall span") - _decimal(opening["width_mm"], "Saved opening width")) / 2)
+
+
+def _opening_position(settings: dict, opening: dict) -> str:
+    start = _opening_start(settings, opening)
+    if opening["offset_mm"] is None:
+        return "centred" + (f" ({_text(start)} mm start)" if start is not None else "")
+    return f"{_text(start)} mm start"
+
+
+def _opening_description(settings: dict, opening: dict) -> str:
+    return (f"{opening['kind'].capitalize()} {opening['id']} on {opening['host']} ({WALL_LABELS[opening['host']]}), "
+            f"{_text(opening['width_mm'])} x {_text(opening['height_mm'])} mm; sill {_text(opening['sill_mm'])} mm; "
+            f"{_opening_position(settings, opening)} from the inner wall reference")
+
+
+def _opening_changes(before: dict, after: dict) -> list[dict]:
+    old_rows, new_rows = _openings(before), _openings(after)
+    changes = []
+    for identity in sorted(old_rows.keys() | new_rows.keys(), key=lambda value: (value[0], int(value[1:]))):
+        old, new = old_rows.get(identity), new_rows.get(identity)
+        if old is None or new is None:
+            added = old is None
+            opening = new if added else old
+            settings = after if added else before
+            changes.append({"field": f"openings.{identity}", "label": f"{opening['kind'].capitalize()} {identity}",
+                            "before": old, "after": new, "description": f"{'Added' if added else 'Removed'} {_opening_description(settings, opening)}.",
+                            "category": "openings", "element_id": identity, "status": "added" if added else "removed"})
+            continue
+        label = f"{new['kind'].capitalize()} {identity}"
+        for field, field_label in (("kind", "type"), ("host", "host wall"), ("width_mm", "width"),
+                                   ("height_mm", "height"), ("sill_mm", "sill height")):
+            if old[field] == new[field]:
+                continue
+            old_text, new_text = _text(old[field]), _text(new[field])
+            if field == "host":
+                old_text, new_text = f"{old[field]} ({WALL_LABELS[old[field]]})", f"{new[field]} ({WALL_LABELS[new[field]]})"
+            suffix = " mm" if field.endswith("_mm") else ""
+            changes.append({"field": f"openings.{identity}.{field}", "label": f"{label} {field_label}",
+                            "before": old[field], "after": new[field],
+                            "description": f"{label} {field_label}: {old_text}{suffix} to {new_text}{suffix}.",
+                            "category": "openings", "element_id": identity, "status": "modified"})
+        old_start, new_start = _opening_start(before, old), _opening_start(after, new)
+        if old["offset_mm"] != new["offset_mm"] or old_start != new_start:
+            changes.append({"field": f"openings.{identity}.offset_mm", "label": f"{label} position",
+                            "before": old["offset_mm"], "after": new["offset_mm"],
+                            "before_start_mm": old_start, "after_start_mm": new_start,
+                            "description": f"{label} position: {_opening_position(before, old)} to {_opening_position(after, new)}; offsets follow each host's inner reference direction.",
+                            "category": "openings", "element_id": identity, "status": "modified"})
+    return changes
+
+
 def _snapshot(result: dict, name: str) -> tuple[dict[str, dict], str, Decimal]:
     if not isinstance(result, dict) or not isinstance(result.get("settings"), dict):
         raise ValueError(f"{name} is missing its saved settings")
@@ -136,7 +228,8 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
     if currency != new_currency:
         raise ValueError("Choose revisions with the same currency. No currency conversion is applied.")
 
-    old_settings, new_settings = _flat(before["settings"]), _flat(after["settings"])
+    old_settings, new_settings = (_flat({key: value for key, value in result["settings"].items() if key != "openings"})
+                                  for result in (before, after))
     ordered_fields = list(FIELD_LABELS) + sorted((old_settings.keys() | new_settings.keys()) - FIELD_LABELS.keys())
     setting_changes = []
     for field in ordered_fields:
@@ -147,6 +240,7 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         suffix = " mm" if field.endswith("_mm") else ""
         setting_changes.append({"field": field, "label": label, "before": old, "after": new,
                                 "description": f"{label}: {_text(old)}{suffix} to {_text(new)}{suffix}.", "category": category})
+    setting_changes.extend(_opening_changes(before["settings"], after["settings"]))
 
     items = []
     for code in dict.fromkeys([*old_rows, *new_rows]):

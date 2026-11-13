@@ -18,7 +18,7 @@ South W1 and north W3 extend one wall thickness beyond the room corners. East W2
 
 Entities: D1, N1, N2, W1, W2, W3
 
-D1 is a centred 1,000 x 2,100 mm south door opening. N1 is a centred north window and N2 a centred east window, each 1,500 x 1,200 mm with a 900 mm sill. Settings validation keeps these openings within their hosts. Editable counts, dimensions, positions, and product types are planned work.
+D1 is a centred 1,000 x 2,100 mm south door opening. N1 is a centred north window and N2 a centred east window, each 1,500 x 1,200 mm with a 900 mm sill. Settings validation keeps these openings within their hosts. D-016 supersedes the fixed-opening restriction: counts, sizes, hosts and positions are now editable, while these three openings remain the default for older designs. Product selection remains planned work.
 
 ## D-004 Model a floor slab within the room footprint
 
@@ -86,3 +86,20 @@ Comparison reports are immutable, versioned by the two revisions and report sour
 ## D-014 Export a draft variation order from an explicit comparison
 
 The Changes & cost PDF action produces a separate variation-order.pdf using the selected saved revisions A and B and their reconciled BOQ differences. The document retains change descriptions even at zero cost, identifies its source revisions and a stable comparison reference, and provides contract-reference, review and approval fields. The existing comparison report remains available. Exporting a PDF does not approve or sign the order, infer contractual entitlement, or value unmodelled costs and programme impacts.
+
+
+## D-015 Make the constrained plan the primary editing workspace
+
+Entities: ROOM1, W1, W2, W3, W4, S0, R0
+
+The plan edits the same millimetre settings used by the compiler. It supports exact dimensions, north/east resize grips, hosted openings, snapping, pan/zoom, measurement, complete-draft undo/redo and review before one explicit update. The south-west datum and rectangular wall topology remain fixed. Draft geometry checks block invalid publication and identify fit/overlap issues; they do not establish regulatory or engineering compliance. The saved baseline is kept separate from the draft so previous issued documents and the resulting variation remain traceable.
+
+A free-form wall drawing tool was deferred because arbitrary wall intersections, room topology and measurement rules need a coordinated model expansion. Validation covers directional host references, undo/redo and invalid drafts, and compiled geometry tests compare the edited model with independent opening deductions. Complex wall topology and building-code compliance remain unverified.
+
+## D-016 Keep editable openings on their compiled hosts
+
+Entities: W1, W2, W3, W4, ROOM1
+
+Doors/windows retain stable D/N identifiers and explicit hosts. Opening starts use the inner reference direction: W1 eastwards, W2 northwards, W3 westwards and W4 southwards. A null start means automatic centring; fixed starts remain fixed when a wall grows. The compiler receives the host-relative start with the corner return allowance on W1/W3. At least 100 mm is required at each inner end, above the opening and between openings on one host. These are concept editing constraints. The application rejects invalid fits instead of silently relocating or shrinking the opening.
+
+The BOQ, specification and plan/elevation schedules use the compiled opening dimensions and IDs. Per-ID change descriptions record additions, removals, moves and size/sill edits, including zero-cost changes. Omitted opening arrays in old saved designs resolve to the original three defaults. Access, structure, door approach zones, circulation, furniture and regulatory suitability require separate project review.
