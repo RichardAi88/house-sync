@@ -12,6 +12,15 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 - BOQ in Excel/CSV; technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
+- A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
+
+## Capture a change from A to B
+
+Every successful update preserves the previous design and automatically creates a comparison with the new design. Open **Changes & cost** to review the last transition, or select any two saved revisions and choose **Compare revisions**. Each report identifies its two source revisions and is saved locally alongside the revision history. Reopening the application preserves these records.
+
+The default 10 x 8 m design has an illustrative subtotal of SGD 28,574.80. Increasing its length to 12 m at the same rates gives SGD 33,022.80, a **SGD 4,448.00 increase**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+
+The comparison separates quantity effects from rate effects and reconciles them to rounded BOQ amounts. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
 
 ## Run on Windows
 
@@ -25,7 +34,7 @@ npm.cmd ci --cache .cache/npm
 .venv\Scripts\python.exe -m housesync.server --open
 ~~~
 
-After setup, double-click **start-house-sync.cmd**. Open **http://127.0.0.1:8765**. Keep the launcher running while using the editor; Ctrl+C stops it. GitHub stores source and history; this backend runs locally on this PC's loopback interface.
+After setup, double-click **start-house-sync.cmd**. Open **http://127.0.0.1:8766**. If the editor is already running, the launcher opens it. Keep the launcher running while using the editor; Ctrl+C stops it. GitHub stores source and history; this backend runs locally on this PC's loopback interface.
 
 On macOS/Linux use `.venv/bin/python -m housesync.server --open` after the same uv/npm setup. Initial local verification was on Windows with Python 3.12.
 
@@ -48,6 +57,7 @@ This is a concept application. The BOQ covers modelled items and illustrative ra
 | `housesync/schema.py` | Validated house parameters and unit rates |
 | `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
 | `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
+| `housesync/changes.py` | Described A-to-B revision comparison and change-cost report exports |
 | `housesync/server.py` | Local server and immutable revision publication |
 | `housesync/static/` | Browser editor and Three.js viewer |
 | `out/house-sync/<revision>/` | Generated files; excluded from Git |
@@ -55,7 +65,7 @@ This is a concept application. The BOQ covers modelled items and illustrative ra
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py -q
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py -q
 .venv\Scripts\ruff.exe check housesync
 node --check housesync/static/app.js
 ~~~

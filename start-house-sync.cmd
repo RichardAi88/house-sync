@@ -1,6 +1,11 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+powershell.exe -NoProfile -Command "try { $taskHealth = Invoke-RestMethod http://127.0.0.1:8766/api/health -TimeoutSec 2; if ($taskHealth.application -eq 'House Sync' -and $taskHealth.features -contains 'revision_comparison') { exit 0 } } catch {}; exit 1" >nul 2>&1
+if not errorlevel 1 (
+  start "" "http://127.0.0.1:8766"
+  exit /b 0
+)
 if not exist ".venv\Scripts\python.exe" (
   echo Setting up the Python environment...
   uv sync --frozen --extra dev --python 3.12 --cache-dir .cache\uv

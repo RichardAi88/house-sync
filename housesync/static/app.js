@@ -4,6 +4,7 @@ import { OrbitControls } from '/vendor/OrbitControls.js';
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
 const state = { result: null, dirty: false, busy: false, selected: null, settingsURL: null };
+const comparison = { revisions: [], result: null, busy: false, request: 0, refresh: 0, selection: 0 };
 const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#currency', '#rate-floor', '#rate-wall', '#rate-roof', '#rate-paint', '#rate-opening'];
 const rateFields = { floor_m2: '#rate-floor', wall_m3: '#rate-wall', roof_m2: '#rate-roof', paint_m2: '#rate-paint', opening_each: '#rate-opening' };
 const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
@@ -38,6 +39,7 @@ function setDirty() {
   $('#sync-status').classList.add('pending');
   $('#form-status').textContent = 'Update to regenerate the model and all documents.';
   setDownloadLinks();
+  $('#comparison-draft-note').hidden = false;
 }
 
 function setBusy(value) {
@@ -82,6 +84,7 @@ function setDownloadLinks() {
 
 function resultReceived(result, populate = false) {
   if (!result || !result.settings || !result.revision) throw new Error('The server returned an incomplete house revision.');
+  const previousRevision = state.result?.revision;
   state.result = result;
   state.dirty = false;
   if (populate) fillForm(result.settings);
@@ -106,6 +109,8 @@ function resultReceived(result, populate = false) {
   if (drawing) $('#drawing-preview').src = `${drawing}${drawing.includes('?') ? '&' : '?'}revision=${encodeURIComponent(result.revision)}`;
   renderModel(result.mesh);
   setDownloadLinks();
+  $('#comparison-draft-note').hidden = true;
+  void refreshComparisons(result, previousRevision, !populate);
 }
 
 function metric(selector, value, unit) {
@@ -148,6 +153,195 @@ function renderSpec(result) {
   const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
   section('03 · Openings', openingDescriptions.length ? openingDescriptions : ['One entrance door and two windows are shown in the concept model. Refer to the drawing schedule for sizes.']);
   section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use editable illustrative allowances in ${settings.currency}; they do not represent a complete tender estimate. All issued files should retain design revision ${result.revision}.`]);
+}
+
+function signedMoney(value, currency) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'Not separated';
+  const amount = Number(value);
+  return `${amount > 0 ? '+' : amount < 0 ? '\u2212' : ''}${money(Math.abs(amount), currency)}`;
+}
+
+function deltaClass(value) {
+  return Number(value) > 0 ? 'delta-positive' : Number(value) < 0 ? 'delta-negative' : 'delta-zero';
+}
+
+function comparisonPair() {
+  return { before: $('#compare-before').value, after: $('#compare-after').value };
+}
+
+function rememberComparison() {
+  try { localStorage.setItem('house-sync-comparison', JSON.stringify(comparisonPair())); } catch { /* Storage is optional. */ }
+}
+
+function savedComparisonPair() {
+  try { return JSON.parse(localStorage.getItem('house-sync-comparison')) || {}; } catch { return {}; }
+}
+
+function comparisonError(message) {
+  $('#comparison-error').textContent = message || '';
+  $('#comparison-error').hidden = !message;
+}
+
+function setComparisonDownloads() {
+  const pair = comparisonPair();
+  const matches = comparison.result && comparison.result.before_revision === pair.before && comparison.result.after_revision === pair.after;
+  document.querySelectorAll('[data-change-file]').forEach(link => {
+    const url = downloadURL(comparison.result?.files?.[link.dataset.changeFile]);
+    const enabled = Boolean(matches && !comparison.busy && url);
+    link.classList.toggle('disabled', !enabled);
+    link.setAttribute('aria-disabled', String(!enabled));
+    if (enabled) { link.href = url; link.setAttribute('download', ''); link.tabIndex = 0; }
+    else { link.removeAttribute('href'); link.removeAttribute('download'); link.tabIndex = -1; }
+  });
+  $('#compare-button').disabled = comparison.busy || !pair.before || !pair.after;
+  $('#compare-button').textContent = comparison.busy ? 'Comparing...' : 'Compare revisions';
+}
+
+function selectedComparisonChanged() {
+  comparison.selection += 1;
+  comparison.request += 1;
+  comparison.busy = false;
+  comparison.result = null;
+  $('#comparison-result').hidden = true;
+  $('#change-ready-dot').hidden = true;
+  $('#comparison-status').textContent = 'Select Compare revisions to capture this A to B change.';
+  comparisonError('');
+  rememberComparison();
+  setComparisonDownloads();
+}
+
+function revisionLabel(record) {
+  const settings = record.settings || {};
+  const dimensions = settings.length_mm && settings.width_mm ? `${number(settings.length_mm / 1000, 1)} x ${number(settings.width_mm / 1000, 1)} m` : '';
+  const date = record.created_at ? new Date(record.created_at) : null;
+  const time = date && !Number.isNaN(date.getTime()) ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  return [record.revision, dimensions, settings.paint_colour, time].filter(Boolean).join(' | ');
+}
+
+async function refreshComparisons(result, previousRevision, fromBuild = false) {
+  const refresh = ++comparison.refresh;
+  const selection = comparison.selection;
+  comparison.request += 1;
+  comparison.busy = false;
+  const previousPair = comparisonPair();
+  try {
+    const revisions = await fetchJSON('/api/revisions');
+    if (refresh !== comparison.refresh || state.result?.revision !== result.revision) return;
+    comparison.revisions = Array.isArray(revisions) ? revisions : revisions.revisions || [];
+    const valid = new Set(comparison.revisions.map(record => record.revision));
+    const preferredPair = selection === comparison.selection ? previousPair : comparisonPair();
+    for (const id of ['#compare-before', '#compare-after']) {
+      const select = $(id); select.replaceChildren();
+      for (const record of comparison.revisions) { const option = document.createElement('option'); option.value = record.revision; option.textContent = revisionLabel(record); select.append(option); }
+      if (!select.options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No saved revision yet'; select.append(option); }
+    }
+    const remembered = savedComparisonPair();
+    const autoBefore = result.previous_revision || previousRevision;
+    const lastChange = result.last_change;
+    const automatic = fromBuild && selection === comparison.selection && autoBefore && valid.has(autoBefore) && autoBefore !== result.revision;
+    let before, after;
+    if (automatic) { before = autoBefore; after = result.revision; }
+    else if (valid.has(preferredPair.before) && valid.has(preferredPair.after)) { before = preferredPair.before; after = preferredPair.after; }
+    else if (valid.has(remembered.before) && valid.has(remembered.after)) { before = remembered.before; after = remembered.after; }
+    else if (lastChange && valid.has(lastChange.before_revision) && valid.has(lastChange.after_revision)) { before = lastChange.before_revision; after = lastChange.after_revision; }
+    else {
+      after = valid.has(result.revision) ? result.revision : comparison.revisions[0]?.revision;
+      const candidates = comparison.revisions.filter(record => record.revision !== after && record.settings?.project_name === result.settings.project_name && record.settings?.currency === result.settings.currency);
+      before = candidates[0]?.revision || comparison.revisions.find(record => record.revision !== after)?.revision || after;
+    }
+    $('#compare-before').value = before || '';
+    $('#compare-after').value = after || '';
+    rememberComparison();
+    comparisonError('');
+    setComparisonDownloads();
+    if (lastChange && lastChange.before_revision === before && lastChange.after_revision === after) renderComparison(lastChange);
+    else if (before && after) await compareSavedRevisions();
+    else $('#comparison-status').textContent = 'Update the house to save a revision, then compare its changes here.';
+  } catch (error) {
+    if (refresh !== comparison.refresh) return;
+    comparisonError(`Saved revisions could not be loaded: ${error.message}`);
+    setComparisonDownloads();
+  }
+}
+
+async function compareSavedRevisions() {
+  const pair = comparisonPair();
+  if (!pair.before || !pair.after) return;
+  const request = ++comparison.request;
+  comparison.busy = true;
+  $('#comparison-result').hidden = true;
+  $('#change-ready-dot').hidden = true;
+  comparisonError('');
+  $('#comparison-status').textContent = 'Comparing descriptions, quantities and unit rates...';
+  setComparisonDownloads();
+  try {
+    const result = await fetchJSON(`/api/compare?before=${encodeURIComponent(pair.before)}&after=${encodeURIComponent(pair.after)}`);
+    const current = comparisonPair();
+    if (request !== comparison.request || current.before !== pair.before || current.after !== pair.after) return;
+    if (result.before_revision !== pair.before || result.after_revision !== pair.after) throw new Error('The comparison returned different revisions. Compare again to refresh the report.');
+    renderComparison(result);
+  } catch (error) {
+    if (request !== comparison.request) return;
+    comparison.result = null;
+    $('#comparison-result').hidden = true;
+    $('#change-ready-dot').hidden = true;
+    $('#comparison-status').textContent = 'Comparison needs attention.';
+    comparisonError(error.message);
+  } finally {
+    if (request === comparison.request) { comparison.busy = false; setComparisonDownloads(); }
+  }
+}
+
+function renderComparison(result) {
+  comparison.result = result;
+  const totals = result.totals || {};
+  const currency = result.currency || 'SGD';
+  $('#comparison-result').hidden = false;
+  $('#compare-cost-before').textContent = money(totals.before, currency);
+  $('#compare-cost-after').textContent = money(totals.after, currency);
+  $('#compare-cost-delta').textContent = signedMoney(totals.net_change, currency);
+  $('#compare-cost-delta').className = deltaClass(totals.net_change);
+  $('#compare-net-label').textContent = totals.net_change > 0 ? 'Net estimate increase' : totals.net_change < 0 ? 'Net estimate saving' : 'No estimate change';
+  $('#compare-additions').textContent = money(totals.additions, currency);
+  $('#compare-omissions').textContent = money(Math.abs(totals.omissions || 0), currency);
+  $('#comparison-revisions').textContent = `A ${result.before_revision} \u2192 B ${result.after_revision}`;
+  $('#comparison-status').textContent = result.has_changes ? 'Change captured. The report describes the selected saved revisions.' : 'Comparison complete. No changes between these saved revisions.';
+  $('#comparison-no-changes').hidden = Boolean(result.has_changes);
+  $('#change-ready-dot').hidden = !result.has_changes;
+  const summaries = Array.isArray(result.summary) && result.summary.length ? result.summary : (result.setting_changes || []).map(item => item.description || `${item.label}: ${item.before} \u2192 ${item.after}`);
+  const list = $('#comparison-summary'); list.replaceChildren();
+  for (const text of summaries) { const item = document.createElement('li'); item.textContent = String(text); list.append(item); }
+  const body = $('#comparison-items'); body.replaceChildren();
+  for (const item of result.items || []) {
+    const row = document.createElement('tr');
+    const description = document.createElement('td');
+    const title = document.createElement('strong'); title.textContent = item.code || 'BOQ item'; description.append(title);
+    const status = document.createElement('span'); status.className = 'change-item-status'; status.textContent = String(item.status || 'modified').replaceAll('_', ' '); description.append(status);
+    const detail = document.createElement('p'); detail.textContent = item.description || item.after_description || item.before_description || ''; description.append(detail);
+    if (item.before_description && item.after_description && item.before_description !== item.after_description) {
+      const before = document.createElement('p'); before.className = 'change-description-before'; before.textContent = `A: ${item.before_description}`; description.append(before);
+      const after = document.createElement('p'); after.className = 'change-description-after'; after.textContent = `B: ${item.after_description}`; description.append(after);
+    }
+    if (item.element_ids?.length) { const ids = document.createElement('small'); ids.textContent = `Elements: ${item.element_ids.join(', ')}`; description.append(ids); }
+    row.append(description);
+    const formatQuantity = value => value === null || value === undefined ? '\u2014' : number(value, 3);
+    const formatRate = value => value === null || value === undefined ? '\u2014' : number(value);
+    const beforeUnit = item.before_unit ?? item.unit ?? '';
+    const afterUnit = item.after_unit ?? item.unit ?? '';
+    const quantityChange = beforeUnit === afterUnit ? `${formatQuantity(item.before_quantity)} \u2192 ${formatQuantity(item.after_quantity)} ${afterUnit}` : `${formatQuantity(item.before_quantity)} ${beforeUnit} \u2192 ${formatQuantity(item.after_quantity)} ${afterUnit}`;
+    const values = [quantityChange, `${formatRate(item.before_rate)} \u2192 ${formatRate(item.after_rate)}`, money(item.before_amount, currency), money(item.after_amount, currency), signedMoney(item.cost_delta, currency)];
+    for (const [index, value] of values.entries()) { const cell = document.createElement('td'); cell.textContent = value; if (index === 4) cell.className = deltaClass(item.cost_delta); row.append(cell); }
+    body.append(row);
+  }
+  if (!body.children.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 6; cell.className = 'no-boq-changes'; cell.textContent = result.has_changes ? 'No BOQ price, quantity or description changes. See the design changes above.' : 'No BOQ changes.'; row.append(cell); body.append(row); }
+  $('#comparison-table-total').textContent = signedMoney(totals.net_change, currency);
+  $('#comparison-table-total').className = deltaClass(totals.net_change);
+  for (const [id, key] of [['#compare-quantity-effect', 'quantity_effect'], ['#compare-rate-effect', 'rate_effect'], ['#compare-rounding-effect', 'rounding_effect']]) $(id).textContent = signedMoney(totals[key], currency);
+  const notes = $('#comparison-notes'); notes.replaceChildren();
+  const noteTexts = Array.isArray(result.notes) ? result.notes : result.notes ? [result.notes] : [];
+  for (const text of noteTexts) { const item = document.createElement('li'); item.textContent = String(text); notes.append(item); }
+  rememberComparison();
+  setComparisonDownloads();
 }
 
 async function fetchJSON(url, options = {}) {
@@ -277,6 +471,10 @@ function roofVisibility() {
 }
 
 form.addEventListener('submit', buildHouse);
+$('#compare-before').addEventListener('change', selectedComparisonChanged);
+$('#compare-after').addEventListener('change', selectedComparisonChanged);
+$('#compare-button').addEventListener('click', compareSavedRevisions);
+document.querySelectorAll('[data-change-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
 fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); setDirty(); }));
 document.querySelectorAll('.paint-swatch').forEach(button => button.addEventListener('click', () => { $('#paint-hex').value = button.dataset.colour; $('#paint-colour').value = button.dataset.name; updateSwatches(); setDirty(); }));
 document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => {
@@ -304,8 +502,14 @@ $('#load-settings').addEventListener('change', async event => {
   event.target.value = '';
 });
 
+function initialFormLoading(value) {
+  form.querySelectorAll('input, select, button').forEach(element => { element.disabled = value; });
+  $('#load-settings').disabled = value;
+}
+
+initialFormLoading(true);
 initializeViewer();
 setBusy(true);
 try { resultReceived(await fetchJSON('/api/state'), true); }
 catch (error) { errorMessage(error.message); $('#form-status').textContent = 'Use Update house & documents to try generating your house.'; $('#sync-status').textContent = 'Ready to generate'; }
-finally { setBusy(false); }
+finally { initialFormLoading(false); setBusy(false); }

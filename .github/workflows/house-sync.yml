@@ -24,8 +24,8 @@ jobs:
       - name: Install locked environment
         run: uv sync --frozen --extra dev
       - name: Lint House Sync
-        run: uv run --frozen ruff check housesync tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py
+        run: uv run --frozen ruff check housesync tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py
       - name: Test model and coordinated exports
-        run: uv run --frozen pytest tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py -q
+        run: uv run --frozen pytest tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py -q
       - name: Check browser source
         run: node --check housesync/static/app.js
