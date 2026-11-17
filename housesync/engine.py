@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
+from shapely.geometry import Polygon, box
+
 from homespec import Assembly, Door, Grid, House, Layer, Level, Material, Render, Roof, Slab, Space, Wall, Window
 from homespec.derived import OpeningGeometry, SpaceGeometry, WallGeometry
 from homespec.export import export_ifc, export_plan, export_schedules
-from homespec.geometry import read_obj
+from homespec.geometry import planar_face_meshes, read_obj, read_step
 from homespec.ir import IRDocument
 
 from .schema import HouseSettings
@@ -30,12 +33,16 @@ _BUILD_LOCK = threading.RLock()
 MEASUREMENT_RULE = (
     "Clear internal floor area; exact final wall volume after all modelled opening cuts. "
     "Walls form a closed, uniform-thickness rectangular shell with butt-jointed corner returns counted once. "
-    "Equivalent net wall area is wall volume divided by thickness. Painting includes both internal and external "
-    "net vertical wall faces, with every modelled door/window opening deducted on both faces; for this shell "
-    "it equals twice the equivalent net wall area. Reveals, sills, soffits, floor/roof paint, waste and coat "
-    "multipliers are excluded. Roof area is the flat roof's compiled top surface including its 300 mm overhang. "
+    "Floor finish and ceiling use the compiled clear internal room area. Skirting uses its internal perimeter "
+    "less compiled door opening widths. Internal plaster/render and external render use final wall faces at "
+    "the room and shell boundaries respectively, deducting opening voids and excluding buried corner faces. "
+    "Painting includes their combined net vertical face area multiplied by the selected coat count. Measured "
+    "net area remains visible separately from the coat-adjusted paint quantity. Reveals, sills, soffits and "
+    "floor/roof paint are excluded. Each item's gross priced quantity is its net quantity times (1 + wastage % / 100), "
+    "rounded to six decimals. Roof area is the flat roof's compiled top surface including its 300 mm overhang. "
     "Door/window quantities count parent products only, excluding their emitted frame, leaf and glazing parts. "
-    "All rates are illustrative allowances, with a shared allowance per door or window; taxes, preliminaries "
+    "Default prices are illustrative AUD rates, not a tender estimate, and are not supplier quotes. Rates have an "
+    "editable source and date, with a shared allowance per door or window; taxes, preliminaries "
     "and other unmodelled construction are excluded."
 )
 
@@ -118,6 +125,49 @@ def _house(settings: HouseSettings) -> House:
     return house
 
 
+def _net_wall_faces(ir: IRDocument) -> tuple[float, float]:
+    """Measure actual final faces, including exposed returns but no buried tabs.
+
+    Main wall surface roles alone are insufficient: the north/south walls own
+    corner returns, so part of their inside faces is buried, while their end
+    caps contribute to the external faces. Clip exact STEP face triangles to
+    the compiled room/shell boundary planes. This rectangular-shell measurement
+    also retains the compiler's opening voids without calculating cuts again.
+    Viewer OBJ files round coordinates and cannot be used for this measurement.
+    """
+    room = ir.entity("ROOM1")
+    outline = room.params["outline"]
+    inner = (min(p[0] for p in outline), min(p[1] for p in outline),
+             max(p[0] for p in outline), max(p[1] for p in outline))
+    walls = ir.of_kind("wall")
+    outer = (min(w.geometry.bbox.min[0] for w in walls if w.geometry),
+             min(w.geometry.bbox.min[1] for w in walls if w.geometry),
+             max(w.geometry.bbox.max[0] for w in walls if w.geometry),
+             max(w.geometry.bbox.max[1] for w in walls if w.geometry))
+    z0 = min(w.geometry.bbox.min[2] for w in walls if w.geometry)
+    z1 = max(w.geometry.bbox.max[2] for w in walls if w.geometry)
+    totals = [0.0, 0.0]
+    boundaries = []
+    for bounds in (inner, outer):
+        x0, y0, x1, y1 = bounds
+        boundaries.append(((0, x0, y0, y1), (0, x1, y0, y1),
+                           (1, y0, x0, x1), (1, y1, x0, x1)))
+    for wall in walls:
+        if wall.geometry is None:
+            continue
+        solid = read_step(ir.path(wall.geometry.step))
+        for mesh in planar_face_meshes(solid, lambda normal: abs(normal[2]) < 1e-7):
+            for face in mesh.triangles:
+                points = [mesh.vertices[index] for index in face]
+                for side, planes in enumerate(boundaries):
+                    for axis, coordinate, start, end in planes:
+                        if all(math.isclose(point[axis], coordinate, abs_tol=1e-5) for point in points):
+                            projected = Polygon([(point[1 - axis], point[2]) for point in points])
+                            if projected.area:
+                                totals[side] += projected.intersection(box(start, z0, end, z1)).area
+    return totals[0] / 1e6, totals[1] / 1e6
+
+
 def _quantities(ir: IRDocument) -> dict[str, float | int]:
     walls = ir.of_kind("wall")
     wall_volume = sum(wall.geometry.volume_mm3 for wall in walls if wall.geometry)
@@ -125,10 +175,21 @@ def _quantities(ir: IRDocument) -> dict[str, float | int]:
         wall.geometry.volume_mm3 / wall.derived_as(WallGeometry).thickness
         for wall in walls if wall.geometry
     )
+    room = ir.entity("ROOM1")
+    floor_area = room.derived_as(SpaceGeometry).area_mm2 / 1e6
+    outline = room.params["outline"]
+    perimeter = sum(math.dist(a, b) for a, b in zip(outline, [*outline[1:], outline[0]], strict=True))
+    door_widths = sum(door.derived_as(OpeningGeometry).width for door in ir.of_kind("door"))
+    internal_faces, external_faces = _net_wall_faces(ir)
     return {
-        "floor_area_m2": round(ir.entity("ROOM1").derived_as(SpaceGeometry).area_mm2 / 1e6, 6),
+        "floor_area_m2": round(floor_area, 6),
+        "floor_finish_area_m2": round(floor_area, 6),
+        "ceiling_area_m2": round(floor_area, 6),
+        "skirting_length_m": round((perimeter - door_widths) / 1000, 6),
+        "internal_plaster_area_m2": round(internal_faces, 6),
+        "external_render_area_m2": round(external_faces, 6),
         "wall_net_area_m2": round(equivalent_wall_area / 1e6, 6),
-        "paint_area_m2": round(2 * equivalent_wall_area / 1e6, 6),
+        "paint_area_m2": round(internal_faces + external_faces, 6),
         "wall_volume_m3": round(wall_volume / 1e9, 6),
         "roof_area_m2": round(ir.entity("R0").derived["surface_area_mm2"] / 1e6, 6),
         "door_count": len(ir.of_kind("door")),
@@ -157,18 +218,32 @@ def _boq(settings: HouseSettings, quantities: dict[str, Any]) -> list[dict[str, 
         ("FLOOR", "150 mm floor slab within clear internal room footprint", "floor_area_m2", "m2", "floor_m2", ["S0"]),
         ("WALL", f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings", "wall_volume_m3", "m3", "wall_m3", ["W1", "W2", "W3", "W4"]),
         ("ROOF", "200 mm flat roof including 300 mm overhang", "roof_area_m2", "m2", "roof_m2", ["R0"]),
-        ("PAINT", f"Wall paint - {settings.paint_colour} ({settings.paint_hex}); internal and external net faces", "paint_area_m2", "m2", "paint_m2", ["W1", "W2", "W3", "W4"]),
+        ("PAINT", f"Wall paint - {settings.paint_colour} ({settings.paint_hex}); internal and external net faces; "
+         f"measured net area {quantities['paint_area_m2']:g} m2 x {settings.paint_coats} coats",
+         "paint_area_m2", "m2", "paint_m2", ["W1", "W2", "W3", "W4"]),
         ("DOOR", door_description, "door_count", "each", "opening_each", door_ids),
         ("WINDOW", window_description, "window_count", "each", "opening_each", window_ids),
+        ("FLOOR_FINISH", "Floor finish to clear internal floor area", "floor_finish_area_m2", "m2", "floor_finish_m2", ["ROOM1", "S0"]),
+        ("CEILING", "Ceiling to clear internal room area", "ceiling_area_m2", "m2", "ceiling_m2", ["ROOM1", "R0"]),
+        ("SKIRTING", "Skirting to internal perimeter less door opening widths", "skirting_length_m", "m", "skirting_m", ["ROOM1", "W1", "W2", "W3", "W4", *door_ids]),
+        ("INTERNAL_PLASTER", "Internal plaster/render to net internal wall faces, deducting opening voids", "internal_plaster_area_m2", "m2", "internal_plaster_m2", ["W1", "W2", "W3", "W4"]),
+        ("EXTERNAL_RENDER", "External render to net external wall faces, deducting opening voids", "external_render_area_m2", "m2", "external_render_m2", ["W1", "W2", "W3", "W4"]),
     ]
     rows = []
     for code, description, quantity_key, unit, rate_key, element_ids in definitions:
-        quantity = quantities[quantity_key]
+        measured = quantities[quantity_key]
+        net = Decimal(str(measured)) * (settings.paint_coats if code == "PAINT" else 1)
+        wastage = getattr(settings.wastage, code.lower())
+        quantity = float((net * (1 + Decimal(str(wastage)) / 100)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
         rate = getattr(settings.rates, rate_key)
         rows.append({
-            "code": code, "description": description, "quantity": quantity, "unit": unit, "rate": rate,
+            "code": code, "description": description, "measured_quantity": measured,
+            "net_quantity": float(net), "wastage_percent": wastage, "gross_quantity": quantity,
+            "quantity": quantity, "unit": unit, "rate": rate,
             "amount": _money(Decimal(str(quantity)) * Decimal(str(rate))), "element_ids": element_ids,
         })
+        if code == "PAINT":
+            rows[-1]["paint_coats"] = settings.paint_coats
     return rows
 
 

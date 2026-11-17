@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { PlanEditor } from './plan-editor.js';
+import { normalizeBoqSettings, WASTAGE_DEFAULTS } from './plan-core.js';
 
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
@@ -13,26 +14,29 @@ const legacyOpenings = () => [
 ];
 let draftOpenings = legacyOpenings();
 const stableSettings = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-const comparableSettings = settings => ({ ...settings, openings: settings.openings ?? legacyOpenings() });
+const comparableSettings = settings => normalizeBoqSettings({ ...settings, openings: settings.openings ?? legacyOpenings() });
 const comparison = { revisions: [], result: null, busy: false, request: 0, refresh: 0, selection: 0 };
-const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#currency', '#rate-floor', '#rate-wall', '#rate-roof', '#rate-paint', '#rate-opening'];
-const rateFields = { floor_m2: '#rate-floor', wall_m3: '#rate-wall', roof_m2: '#rate-roof', paint_m2: '#rate-paint', opening_each: '#rate-opening' };
+const rateFields = { floor_m2: '#rate-floor', wall_m3: '#rate-wall', roof_m2: '#rate-roof', paint_m2: '#rate-paint', opening_each: '#rate-opening', floor_finish_m2: '#rate-floor-finish', ceiling_m2: '#rate-ceiling', skirting_m: '#rate-skirting', internal_plaster_m2: '#rate-internal-plaster', external_render_m2: '#rate-external-render' };
+const wastageFields = Object.fromEntries(Object.keys(WASTAGE_DEFAULTS).map(key => [key, '#wastage-' + key.replaceAll('_', '-')]));
+const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', ...Object.values(rateFields), ...Object.values(wastageFields)];
 const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
 const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
-const money = (value, currency = 'SGD') => `${currency} ${number(value)}`;
+const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), currency: $('#currency').value, rates: Object.fromEntries(Object.entries(rateFields).map(([key, id]) => [key, Number($(id).value)])), openings: structuredClone(draftOpenings) };
+  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rates: Object.fromEntries(Object.entries(rateFields).map(([key, id]) => [key, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings) };
 }
 
 function fillForm(settings) {
+  settings = normalizeBoqSettings(settings);
   draftOpenings = structuredClone(settings.openings ?? legacyOpenings());
   if (settings.currency && ![...$('#currency').options].some(option => option.value === settings.currency)) {
     const option = document.createElement('option'); option.value = settings.currency; option.textContent = settings.currency; $('#currency').append(option);
   }
-  const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#currency': settings.currency };
+  const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date };
   for (const [id, value] of Object.entries(map)) if (value !== undefined && value !== null) $(id).value = value;
   for (const [key, id] of Object.entries(rateFields)) if (settings.rates?.[key] !== undefined) $(id).value = settings.rates[key];
+  for (const [key, id] of Object.entries(wastageFields)) $(id).value = settings.wastage[key];
   updateSwatches();
 }
 
@@ -106,7 +110,7 @@ function resultReceived(result, populate = false) {
   state.dirty = false;
   if (populate) fillForm(result.settings);
   if (populate) planEditor?.setDraft(settingsFromForm(), { resetHistory: true });
-  planEditor?.setBaseline(result.settings, result.revision);
+  planEditor?.setBaseline(comparableSettings(result.settings), result.revision);
   $('#project-title').textContent = result.settings.project_name;
   $('#revision-label').textContent = `Revision ${result.revision}`;
   $('#sync-status').textContent = 'Model & documents in sync';
@@ -145,11 +149,11 @@ function renderBOQ(result) {
   body.replaceChildren();
   for (const row of result.boq || []) {
     const tr = document.createElement('tr');
-    const values = [row.code, row.description, number(row.quantity, 3), row.unit, number(row.rate), number(row.amount)];
+    const values = [row.code, row.description, number(row.net_quantity ?? row.quantity, 3), `${number(row.wastage_percent ?? 0)}%`, number(row.gross_quantity ?? row.quantity, 3), row.unit, number(row.rate), number(row.amount)];
     for (const value of values) { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); }
     body.append(tr);
   }
-  $('#measurement-note').textContent = result.measurement_rule || result.measurement_rules || 'Paint includes internal and external net wall faces, deducting openings. Reveals, wastage and other construction work are excluded unless stated. Rates are illustrative allowances.';
+  $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', `Rate source: ${result.settings.rate_source ?? 'Not recorded'}. Date: ${result.settings.rate_date ?? 'Not recorded'}. illustrative AUD rates, not a tender estimate.`].join(' ');
 }
 
 function renderSpec(result) {
@@ -169,8 +173,14 @@ function renderSpec(result) {
   section('01 · Scope & setting out', [`Single-storey rectangular house with clear internal dimensions of ${number(settings.length_mm, 0)} × ${number(settings.width_mm, 0)} mm. Wall height ${number(settings.height_mm, 0)} mm; wall thickness ${number(settings.wall_thickness_mm, 0)} mm.`, 'Refer to the coordinated floor plan and elevations for element locations and overall dimensions.']);
   const finish = section('02 · Wall finish', [`Selected paint: ${settings.paint_colour}. Colour reference ${settings.paint_hex}. Apply the coordinated finish to the internal and external wall faces identified by this model.`, 'Confirm the manufacturer, product, substrate preparation, primer and coating system before construction.']);
   const colour = document.createElement('span'); colour.className = 'spec-colour'; colour.style.backgroundColor = settings.paint_hex; finish.querySelector('p').prepend(colour);
+  const paint = result.boq?.find(row => row.code === 'PAINT');
+  if (paint?.net_quantity !== undefined) { const paragraph = document.createElement('p'); paragraph.textContent = `${number(paint.measured_quantity, 3)} m2 measured net wall area x ${settings.paint_coats} coats = ${number(paint.net_quantity, 3)} m2 before ${number(paint.wastage_percent)}% wastage; priced gross quantity ${number(paint.gross_quantity, 3)} m2.`; finish.append(paragraph); }
   const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high; start ${number(opening.start_mm, 0)} mm from the host inner reference${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
   section('03 · Openings', openingDescriptions.length ? openingDescriptions : ['No doors or windows are included in this saved revision.']);
+  const trades = new Set(['FLOOR_FINISH', 'CEILING', 'SKIRTING', 'INTERNAL_PLASTER', 'EXTERNAL_RENDER']);
+  for (const row of result.boq || []) if (trades.has(row.code)) {
+    section(row.code.replaceAll('_', ' ').toLowerCase(), [row.description, `Net ${number(row.net_quantity, 3)} ${row.unit}; wastage ${number(row.wastage_percent)}%; gross ${number(row.gross_quantity, 3)} ${row.unit}.`]);
+  }
   section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use editable illustrative allowances in ${settings.currency}; they do not represent a complete tender estimate. All issued files should retain design revision ${result.revision}.`]);
 }
 
@@ -314,7 +324,7 @@ async function compareSavedRevisions() {
 function renderComparison(result) {
   comparison.result = result;
   const totals = result.totals || {};
-  const currency = result.currency || 'SGD';
+  const currency = result.currency || 'AUD';
   $('#comparison-result').hidden = false;
   $('#compare-cost-before').textContent = money(totals.before, currency);
   $('#compare-cost-after').textContent = money(totals.after, currency);

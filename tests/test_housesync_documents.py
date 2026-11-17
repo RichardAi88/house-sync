@@ -4,10 +4,13 @@ from __future__ import annotations
 import csv
 import xml.etree.ElementTree as ET
 from copy import deepcopy
+from decimal import ROUND_HALF_UP, Decimal
 from zipfile import ZipFile
 
 import pytest
+from docx import Document
 from openpyxl import load_workbook
+from reportlab import rl_config
 
 from housesync.documents import drawing_primitives, drawing_sheets, export_documents
 
@@ -39,12 +42,14 @@ def test_document_families_share_revision_and_current_data(tmp_path, compiled_re
     ws = wb.active
     assert compiled_result["revision"] in ws["A3"].value
     assert ws["D7"].value == 80
-    assert ws["F7"].value == "=ROUND(D7*E7,2)"
-    assert ws["F10"].value == "=SUM(F7:F8)"
+    assert ws["E7"].value == 0
+    assert ws["F7"].value == "=ROUND(D7*(1+E7/100),6)"
+    assert ws["H7"].value == "=ROUND(F7*G7,2)"
+    assert ws["H10"].value == "=SUM(H7:H8)"
     with (tmp_path / "boq.csv").open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
     assert rows[0][3] == compiled_result["revision"]
-    assert float(rows[2][5]) == 6400
+    assert float(rows[2][7]) == 6400
     with ZipFile(tmp_path / "specification.docx") as zipped:
         text = zipped.read("word/document.xml").decode()
     assert compiled_result["revision"] in text
@@ -58,6 +63,62 @@ def test_document_families_share_revision_and_current_data(tmp_path, compiled_re
     assert "10,400 wall overall" in svg_text
     for name in ("specification.pdf", "drawings.pdf"):
         assert (tmp_path / name).read_bytes().startswith(b"%PDF-")
+
+
+def test_expanded_boq_exports_net_waste_gross_and_rates_and_specifies_each_trade(tmp_path, compiled_result, monkeypatch):
+    result = deepcopy(compiled_result)
+    result["settings"].update(currency="AUD", paint_coats=2, rate_source="Demonstration assumptions; no supplier quotes", rate_date="2026-11-17")
+    result["boq"] = []
+    definitions = [
+        ("FLOOR_FINISH", "Floor finish; clear internal area", "m2", 80, 10, 65, ["ROOM1"]),
+        ("CEILING", "Ceiling; clear internal area", "m2", 80, 5, 45, ["ROOM1"]),
+        ("SKIRTING", "Skirting; internal perimeter less door widths", "m", 35, 10, 18, ["W1", "W2", "W3", "W4"]),
+        ("INTERNAL_PLASTER", "Internal plaster/render; net internal wall faces", "m2", 102.3, 5, 28, ["W1", "W2", "W3", "W4"]),
+        ("EXTERNAL_RENDER", "External render; net external wall faces", "m2", 107.1, 5, 40, ["W1", "W2", "W3", "W4"]),
+        ("PAINT", "Wall paint; measured net area 209.4 m2 x 2 coats", "m2", 418.8, 0, 9, ["W1", "W2", "W3", "W4"]),
+    ]
+    for code, description, unit, net, waste, rate, ids in definitions:
+        gross = Decimal(str(net)) * (1 + Decimal(str(waste)) / 100)
+        item = {"code": code, "description": description, "unit": unit, "net_quantity": net, "wastage_percent": waste,
+                "gross_quantity": float(gross), "quantity": float(gross), "rate": rate,
+                "amount": float((gross * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "element_ids": ids}
+        if code == "PAINT":
+            item.update(measured_quantity=209.4, paint_coats=2)
+        result["boq"].append(item)
+    result["totals"] = {"currency": "AUD", "subtotal": float(sum(Decimal(str(item["amount"])) for item in result["boq"]))}
+    # Uncompressed test output lets us verify the PDF carries the same trade
+    # headings without adding a PDF parser to the application's dependencies.
+    monkeypatch.setattr(rl_config, "pageCompression", 0)
+    export_documents(result, tmp_path)
+    worksheet = load_workbook(tmp_path / "boq.xlsx", data_only=False).active
+    assert [cell.value for cell in worksheet[6]][3:8] == ["Net quantity", "Wastage %", "Gross quantity", "Unit rate", "Amount (AUD)"]
+    assert "Illustrative AUD rates, not a tender estimate" in worksheet["A3"].value
+    assert "Demonstration assumptions; no supplier quotes" in worksheet["A4"].value
+    assert "2026-11-17" in worksheet["A4"].value
+    with (tmp_path / "boq.csv").open(encoding="utf-8-sig", newline="") as stream:
+        csv_rows = list(csv.reader(stream))
+    for idx, item in enumerate(result["boq"], 7):
+        assert worksheet.cell(idx, 4).value == item["net_quantity"]
+        assert worksheet.cell(idx, 5).value == item["wastage_percent"]
+        assert worksheet.cell(idx, 6).value == f"=ROUND(D{idx}*(1+E{idx}/100),6)"
+        assert worksheet.cell(idx, 7).value == item["rate"]
+        assert worksheet.cell(idx, 8).value == f"=ROUND(F{idx}*G{idx},2)"
+        row = csv_rows[idx - 5]
+        assert row[0] == item["code"]
+        assert [float(value) for value in row[3:8]] == pytest.approx([
+            item["net_quantity"], item["wastage_percent"], item["gross_quantity"], item["rate"], item["amount"],
+        ])
+    assert worksheet["H14"].value == "=SUM(H7:H12)"
+    assert float(csv_rows[8][7]) == result["totals"]["subtotal"]
+    doc = Document(tmp_path / "specification.docx")
+    spec_text = " ".join([paragraph.text for paragraph in doc.paragraphs] + [cell.text for table in doc.tables for row in table.rows for cell in row.cells])
+    for label in ("Floor finish", "Ceiling", "Skirting", "Internal plaster/render", "External render", "Paint measurement"):
+        assert label in spec_text
+        assert label.encode() in (tmp_path / "specification.pdf").read_bytes()
+    for expected in ("Net 80.000000 m2; wastage 10%; gross priced quantity 88.000000 m2", "Measured net wall area 209.400000 m2; 2 coat(s)",
+                     "net coated quantity 418.800000 m2", "Illustrative AUD rates, not a tender estimate", "2026-11-17"):
+        assert expected in spec_text
+    assert result["revision"] in spec_text
 
 
 def test_drawing_uses_compiled_openings_and_new_finish(compiled_result):

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 OPENING_CLEARANCE_MM = 100.0
 
@@ -14,11 +15,48 @@ class UnitRates(BaseModel):
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, validate_assignment=True)
 
-    floor_m2: float = Field(default=80, ge=0, le=1_000_000)
-    wall_m3: float = Field(default=300, ge=0, le=1_000_000)
-    roof_m2: float = Field(default=120, ge=0, le=1_000_000)
-    paint_m2: float = Field(default=12, ge=0, le=1_000_000)
-    opening_each: float = Field(default=500, ge=0, le=1_000_000)
+    floor_m2: float = Field(default=95, ge=0, le=1_000_000)
+    wall_m3: float = Field(default=380, ge=0, le=1_000_000)
+    roof_m2: float = Field(default=145, ge=0, le=1_000_000)
+    paint_m2: float = Field(default=9, ge=0, le=1_000_000)
+    opening_each: float = Field(default=650, ge=0, le=1_000_000)
+    floor_finish_m2: float = Field(default=65, ge=0, le=1_000_000)
+    ceiling_m2: float = Field(default=45, ge=0, le=1_000_000)
+    skirting_m: float = Field(default=18, ge=0, le=1_000_000)
+    internal_plaster_m2: float = Field(default=28, ge=0, le=1_000_000)
+    external_render_m2: float = Field(default=40, ge=0, le=1_000_000)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def numeric_rates(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("unit rates must be numbers, not booleans")
+        return value
+
+
+class WastageSettings(BaseModel):
+    """Percentage allowances on each BOQ item's net priced quantity."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, validate_assignment=True)
+
+    floor: float = Field(default=0, ge=0, le=100)
+    wall: float = Field(default=0, ge=0, le=100)
+    roof: float = Field(default=0, ge=0, le=100)
+    paint: float = Field(default=0, ge=0, le=100)
+    door: float = Field(default=0, ge=0, le=100)
+    window: float = Field(default=0, ge=0, le=100)
+    floor_finish: float = Field(default=10, ge=0, le=100)
+    ceiling: float = Field(default=5, ge=0, le=100)
+    skirting: float = Field(default=10, ge=0, le=100)
+    internal_plaster: float = Field(default=5, ge=0, le=100)
+    external_render: float = Field(default=5, ge=0, le=100)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def numeric_percentages(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("wastage percentages must be numbers, not booleans")
+        return value
 
 
 class OpeningSettings(BaseModel):
@@ -81,11 +119,15 @@ class HouseSettings(BaseModel):
     wall_thickness_mm: float = Field(default=200, ge=100, le=500)
     paint_colour: str = Field(default="Light blue", min_length=1, max_length=80)
     paint_hex: str = Field(default="#ADD8E6", pattern=r"^#[0-9A-Fa-f]{6}$")
-    currency: str = Field(default="SGD", pattern=r"^[A-Z]{3}$")
+    currency: str = Field(default="AUD", pattern=r"^[A-Z]{3}$")
+    paint_coats: StrictInt = Field(default=2, ge=1, le=10)
     rates: UnitRates = Field(default_factory=UnitRates)
+    wastage: WastageSettings = Field(default_factory=WastageSettings)
+    rate_source: str = Field(default="Illustrative AUD rates, not a tender estimate; no supplier quotes", min_length=1, max_length=240)
+    rate_date: date = Field(default=date(2026, 11, 17))
     openings: list[OpeningSettings] = Field(default_factory=default_openings, max_length=40)
 
-    @field_validator("project_name", "paint_colour")
+    @field_validator("project_name", "paint_colour", "rate_source")
     @classmethod
     def printable_text(cls, value: str) -> str:
         value = value.strip()

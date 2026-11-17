@@ -83,7 +83,9 @@ class Application:
         with self.lock:
             before = self.read_revision(before_revision)
             after = self.read_revision(after_revision)
-            source = Path(__file__).with_name("changes.py").read_bytes()
+            # Legacy comparison normalisation depends on validated schema
+            # defaults as well as report code; both version cached reports.
+            source = b"\0".join(Path(__file__).with_name(name).read_bytes() for name in ("changes.py", "schema.py"))
             version = hashlib.sha256(source).hexdigest()[:12]
             comparison_id = f"{before_revision}_{after_revision}_{version}"
             destination = self.changes_root / comparison_id
@@ -299,13 +301,32 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                 traceback.print_exc()
                 self._json({"error": f"Unable to load project: {exc}"}, 500)
 
+        def _reject_post(self, message: str, status: int) -> None:
+            # Drain bounded request bodies before closing. The expanded settings
+            # payload otherwise causes Windows to reset the socket before the
+            # client can read a rejection response. Never parse or build it.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if 0 < length <= MAX_BODY:
+                timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(1)
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+                finally:
+                    self.connection.settimeout(timeout)
+            self._json({"error": message}, status)
+
         def do_POST(self) -> None:
             if not self._allowed_host():
-                self._json({"error": "This application accepts localhost requests only."}, 403)
+                self._reject_post("This application accepts localhost requests only.", 403)
                 return
             origin = self.headers.get("Origin")
             if origin and origin not in {f"http://127.0.0.1:{self.server.server_port}", f"http://localhost:{self.server.server_port}"}:
-                self._json({"error": "Origin is not allowed"}, 403)
+                self._reject_post("Origin is not allowed", 403)
                 return
             route = urlsplit(self.path).path
             if route not in {"/api/build", "/api/shutdown"}:
