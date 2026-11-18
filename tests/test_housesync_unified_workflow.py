@@ -144,8 +144,8 @@ def test_room_split_saved_geometry_boq_and_ifc_share_one_revision(unified_workfl
         assert set(rows) == {"FLOOR_FINISH", "CEILING", "SKIRTING", "INTERNAL_PLASTER", "PAINT"}
         assert rows["FLOOR_FINISH"]["gross_quantity"] == pytest.approx(room["area_m2"] * 1.1)
         assert rows["PAINT"]["net_quantity"] == pytest.approx(room["paint_area_m2"] * 2)
-    mime, data = flow["fetch"](split["files"]["ifc"])
-    assert data and mime in {"application/octet-stream", "application/x-step", "model/ifc"}
+    _, data = flow["fetch"](split["files"]["ifc"])
+    assert data.startswith(b"ISO-10303-21;")
     model = ifcopenshell.file.from_string(data.decode())
     assert {space.Name for space in model.by_type("IfcSpace")} == {room["id"] for room in rooms.values()}
     assert {space.LongName for space in model.by_type("IfcSpace")} == {"Study", "Living"}
