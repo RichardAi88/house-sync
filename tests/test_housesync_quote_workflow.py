@@ -246,7 +246,7 @@ def test_maximum_legal_escaped_unicode_allowances_fit_the_bounded_http_body(quot
     payload["builder_pricing"]["client_description"] = "\U0001f3e0" * 2000
     payload["builder_pricing"]["builder_name"] = "\U0001f3e0" * 120
     length = len(json.dumps(payload).encode("utf-8"))
-    assert 1_048_576 < length < server.MAX_BODY <= 2_097_152
+    assert 1_048_576 < length < server.MAX_BODY <= 4_194_304
     seen = []
 
     def accept(settings):

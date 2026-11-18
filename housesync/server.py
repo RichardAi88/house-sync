@@ -23,6 +23,8 @@ from pydantic import ValidationError
 from .changes import compare_revisions, export_change_report
 from .documents import export_documents
 from .engine import build_house, revision_for
+from .layout import derive_layout
+from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
 from .quote_documents import export_quote_documents
 from .quotes import build_variation_quote
 from .rates import RateLibrary, RateLibraryError, load_rate_library
@@ -30,7 +32,7 @@ from .schema import HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
-MAX_BODY = 2_097_152
+MAX_BODY = 4_194_304
 REVISION = re.compile(r"^[0-9a-f]{12}$")
 COMPARISON = re.compile(r"^[0-9a-f]{12}_[0-9a-f]{12}_[0-9a-f]{12}$")
 COMPARISON_CONTRACT = "house-sync-client-quotes-1"
@@ -280,19 +282,44 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             if not path.is_relative_to(root.resolve()) or not path.is_file():
                 self._json({"error": "File not found"}, 404)
                 return
-            content = path.read_bytes()
             mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             if path.suffix == ".js":
                 mime = "text/javascript"
+            self._content(path.read_bytes(), mime, path.name if attachment else None)
+
+        def _content(self, content: bytes, mime: str, filename: str | None = None) -> None:
             self.send_response(200)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(content)))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-cache")
-            if attachment:
-                self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            if filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.end_headers()
             self.wfile.write(content)
+
+        def _purchase_order(self, path: str) -> None:
+            parts = path.split("/")
+            if len(parts) != 4 or not REVISION.fullmatch(parts[2]):
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            revision, filename = parts[2:]
+            if filename == "all.zip":
+                saved = application.read_revision(revision)
+                self._content(purchase_orders_zip(saved), "application/zip", f"purchase-orders-{revision}.zip")
+                return
+            item = re.fullmatch(r"([A-Z][A-Z0-9_]*)\.pdf", filename)
+            if not item:
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            saved = application.read_revision(revision)
+            code = item.group(1)
+            try:
+                pdf = purchase_order_pdf(saved, code)
+            except UnknownPurchaseOrder:
+                self._json({"error": "Item not found in the saved bill of quantities"}, 404)
+                return
+            self._content(pdf, "application/pdf", f"PO-{revision}-{code}.pdf")
 
         def do_GET(self) -> None:
             if not self._allowed_host():
@@ -308,6 +335,8 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json(load_rate_library(application.rate_library_path).snapshot())
                 elif path == "/api/revisions":
                     self._json(application.revisions())
+                elif path.startswith("/purchase-orders/"):
+                    self._purchase_order(path)
                 elif path == "/api/compare":
                     query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                     if len(query.get("before", [])) != 1 or len(query.get("after", [])) != 1:
@@ -376,7 +405,7 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                 self._reject_post("Origin is not allowed", 403)
                 return
             route = urlsplit(self.path).path
-            if route not in {"/api/build", "/api/shutdown"}:
+            if route not in {"/api/build", "/api/layout", "/api/shutdown"}:
                 self._json({"error": "Route not found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -388,6 +417,12 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "Invalid request size"}, 413)
                     return
                 body = self.rfile.read(length)
+                if route == "/api/layout":
+                    draft = json.loads(body)
+                    if not isinstance(draft, dict):
+                        raise ValueError("Send a house design object for the plan preview.")
+                    self._json(derive_layout(draft, validate=False))
+                    return
                 if route == "/api/shutdown":
                     if json.loads(body) != {"application": "House Sync"}:
                         self._json({"error": "Identify the application to stop."}, 422)

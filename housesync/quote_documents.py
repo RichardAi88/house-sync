@@ -190,6 +190,64 @@ def _allowance_sections(public: dict, styles: dict, width: float) -> list[Any]:
     return content
 
 
+def _saved_group_context(item: dict) -> list[str]:
+    """Read archived room ownership without deriving it from BOQ code spelling."""
+    context = []
+    for label, key in (("A", "before"), ("B", "after")):
+        saved = item.get(key)
+        if not isinstance(saved, dict):
+            continue
+        name = _text(saved.get("group_name"))
+        identity = _text(saved.get("group_id"))
+        rate_code = _text(saved.get("rate_code"))
+        if name or identity:
+            context.append(f"{label} group: {name or identity}" + (f" ({identity})" if name and identity else "") + ".")
+        if rate_code:
+            context.append(f"{label} rate basis: {rate_code}.")
+    return context
+
+
+def _commercial_movements(internal: dict, styles: dict, width: float) -> list[Any]:
+    """Show saved pricing movements separately from the unchanged row audit."""
+    movements = internal.get("pricing_movements")
+    if not isinstance(movements, list) or not movements:
+        return []
+    content = [_paragraph("Commercial BOQ movements", styles, "heading"),
+               _paragraph("The commercial calculation uses these saved movements. The measured item audit below retains the original "
+                          "A and B rows, including rows that were regrouped when room ownership changed.", styles, "small")]
+    headers = ("Trade / finish", "Amount A", "Amount B", "At-cost movement", "Saved source codes")
+    rows = [[_paragraph(label, styles, "header") for label in headers]]
+    for movement in movements:
+        label = _text(movement.get("rate_code"), _text(movement.get("code"), "BOQ"))
+        if movement.get("finish"):
+            label += "\n" + _text(movement["finish"])
+        sources = movement.get("source_codes", [movement.get("code", "")])
+        values = [label, _money(movement["before_amount"]), _money(movement["after_amount"]),
+                  _money(movement["cost_delta"]), "\n".join(_text(code) for code in sources)]
+        rows.append([_paragraph(value, styles, "small") for value in values])
+    content.append(_table(rows, [width*.25, width*.12, width*.12, width*.14, width*.37], header=True))
+    reconciliations = internal.get("regrouping_reconciliations", [])
+    for record in reconciliations:
+        label = _text(record.get("rate_code"), "BOQ")
+        if record.get("finish"):
+            label += " - " + _text(record["finish"])
+        content.append(_paragraph("Regrouping: " + label, styles, "heading"))
+        content.append(_paragraph(_text(record.get("reason")), styles, "small"))
+        content.append(_paragraph(f"Saved A {_money(record['before_amount'])}; saved B {_money(record['after_amount'])}; "
+                                  f"commercial movement {_money(record['cost_delta'])}. "
+                                  f"Pricing basis: {_text(record.get('basis_mode'))}; unit {_text(record.get('unit'))}.", styles, "small"))
+        for source in record.get("source_lines", []):
+            group = _text(source.get("group_name"), _text(source.get("group_id"), "Ungrouped"))
+            if source.get("group_id") and group != source["group_id"]:
+                group += " (" + _text(source["group_id"]) + ")"
+            content.append(_paragraph(f"{_text(source.get('side')).capitalize()}: {_text(source.get('code'))}; {group}; "
+                                      f"saved amount {_money(source['amount'])}; rate {_number(source['rate'])} AUD/{_text(record.get('unit'))}; "
+                                      f"origin {_text(source.get('rate_origin'), 'Not recorded')}; "
+                                      f"source {_text(source.get('rate_source'), 'Not recorded')}; "
+                                      f"effective date {_text(source.get('rate_effective_date'), 'Not recorded')}.", styles, "small"))
+    return content
+
+
 def client_variation_quote_pdf(public: dict) -> bytes:
     """Render exclusively client-allowlisted values, without item-level costs."""
     if not isinstance(public, dict) or public.get("currency") != "AUD":
@@ -291,23 +349,26 @@ def internal_variation_breakdown_pdf(internal: dict, comparison: dict) -> bytes:
     if "requested_admin_fee_aud" in internal:
         story.append(_paragraph(f"Requested fixed administration fee: {_money(internal['requested_admin_fee_aud'])}; "
                                 f"fee applied: {'Yes' if internal.get('admin_fee_applied') else 'No'}.", styles, "small"))
+    story.extend(_commercial_movements(internal, styles, width))
     story.append(_paragraph("Measured BOQ item differences", styles, "heading"))
     items = internal.get("boq_changes", comparison.get("items", []))
     headers = ["Item", "Description", "Quantity A", "Quantity B", "Rate A", "Rate B", "Amount A", "Amount B", "Difference"]
     rows = [[_paragraph(label, styles, "header") for label in headers]]
     for item in items:
         unit = _text(item.get("unit"))
-        values = [item.get("code", ""), item.get("description", ""), f"{_number(item['before_quantity'])} {unit}",
+        scope = "\n".join([*_saved_group_context(item), _text(item.get("description"))])
+        values = [item.get("code", ""), scope, f"{_number(item['before_quantity'])} {unit}",
                   f"{_number(item['after_quantity'])} {unit}", _number(item["before_rate"]), _number(item["after_rate"]),
                   _money(item["before_amount"]), _money(item["after_amount"]), _money(item["cost_delta"])]
         rows.append([_paragraph(value, styles, "small") for value in values])
     if len(rows) == 1:
         rows.append([_paragraph("No changed BOQ items", styles, "small")] + [""]*8)
-    fixed = [78, 180, 58, 58, 51, 51, 70, 70]
+    fixed = [124, 185, 58, 58, 51, 51, 80, 80]
     story.append(_table(rows, [*fixed, width - sum(fixed)], header=True))
     story.append(_paragraph("Quantity, rate and rounding basis", styles, "heading"))
     for item in items:
-        lines = [f"{item.get('code', '')}: net quantity A {item.get('before_net_quantity', 'Not recorded')} to B {item.get('after_net_quantity', 'Not recorded')}; "
+        lines = [*_saved_group_context(item),
+                 f"{item.get('code', '')}: net quantity A {item.get('before_net_quantity', 'Not recorded')} to B {item.get('after_net_quantity', 'Not recorded')}; "
                  f"wastage A {item.get('before_wastage_percent', 'Not recorded')}% to B {item.get('after_wastage_percent', 'Not recorded')}%. "
                  f"Quantity effect {item.get('quantity_effect')}; rate effect {item.get('rate_effect')}; rounding {item.get('rounding_effect')} AUD."]
         for label, prefix in (("A", "before"), ("B", "after")):

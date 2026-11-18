@@ -28,7 +28,7 @@
           <label class="field">Wall height<div class="input-unit"><input id="height" type="number" min="2.4" max="5" step="0.001" value="3" required><span>m</span></div></label>
           <label class="field">Wall thickness<div class="input-unit"><input id="thickness" type="number" min="0.1" max="0.5" step="0.001" value="0.2" required><span>m</span></div></label>
         </div>
-        <p class="field-note">Room dimensions are clear internal sizes. Overall dimensions include the walls.</p>
+        <p class="field-note">Shell dimensions are clear inside the exterior walls. Partitions reduce individual room areas.</p>
         <div class="section-heading"><h2>Wall finish</h2><span>inside &amp; outside</span></div>
         <div class="paint-presets" role="group" aria-label="Paint colour presets">
           <button class="paint-swatch active" type="button" data-colour="#ADD8E6" data-name="Light blue" title="Light blue" aria-label="Light blue" aria-pressed="true" style="--swatch:#ADD8E6"></button>
@@ -105,6 +105,7 @@
         <button class="view-tab" id="tab-model" data-panel="model" role="tab" aria-selected="false" aria-controls="panel-model">3D model</button>
         <button class="view-tab" id="tab-drawings" data-panel="drawings" role="tab" aria-selected="false" aria-controls="panel-drawings">Drawings</button>
         <button class="view-tab" id="tab-boq" data-panel="boq" role="tab" aria-selected="false" aria-controls="panel-boq">Bill of quantities</button>
+        <button class="view-tab" id="tab-purchasing" data-panel="purchasing" role="tab" aria-selected="false" aria-controls="panel-purchasing">Purchasing</button>
         <button class="view-tab" id="tab-rates" data-panel="rates" role="tab" aria-selected="false" aria-controls="panel-rates">Rates</button>
         <button class="view-tab" id="tab-spec" data-panel="spec" role="tab" aria-selected="false" aria-controls="panel-spec">Specification</button>
         <button class="view-tab" id="tab-changes" data-panel="changes" role="tab" aria-selected="false" aria-controls="panel-changes">Changes &amp; cost <span id="change-ready-dot" class="change-ready-dot" hidden></span></button>
@@ -119,6 +120,15 @@
       </div>
       <div id="panel-drawings" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-drawings" hidden><div class="document-heading"><div><h3>Plans &amp; elevations</h3><p>Dimensioned from the same house revision.</p></div><a data-file="drawings_pdf" class="secondary-button disabled" aria-disabled="true">Download PDF ↓</a></div><div class="drawing-sheet"><img id="drawing-preview" alt="Dimensioned floor plan, all four elevations and opening schedule of the current house"></div></div>
       <div id="panel-boq" class="view-panel document-panel" role="tabpanel" aria-labelledby="tab-boq" hidden><div class="document-heading"><div><h3>Bill of quantities</h3><p>Net quantities, item wastage and gross quantities priced at editable rates.</p></div><a data-file="boq_xlsx" class="secondary-button disabled" aria-disabled="true">Download Excel ↓</a></div><div class="table-scroll"><table class="boq-table"><thead><tr><th>Item</th><th>Description</th><th>Net quantity</th><th>Wastage %</th><th>Gross quantity</th><th>Unit</th><th>Rate</th><th>Rate basis</th><th>Amount</th></tr></thead><tbody id="boq-body"></tbody><tfoot><tr><th colspan="8">BOQ subtotal</th><td id="boq-total">—</td></tr></tfoot></table></div><p id="measurement-note" class="document-note"></p></div>
+      <div id="panel-purchasing" class="view-panel document-panel purchasing-panel" role="tabpanel" aria-labelledby="tab-purchasing" hidden>
+        <div class="document-heading"><div><h3>Draft purchase orders</h3><p>One ready-to-complete PDF for each item in the displayed saved BOQ.</p></div><a id="purchase-orders-all" data-purchase-order-code="all" class="secondary-button disabled" aria-disabled="true" aria-describedby="purchasing-status" tabindex="-1">Download all draft POs (ZIP)</a></div>
+        <div class="purchasing-summary"><span class="snapshot-label">DRAFT &middot; NOT ISSUED</span><strong id="purchasing-count">0 draft purchase orders</strong><span id="purchasing-revision">No saved revision</span></div>
+        <p id="purchasing-status" class="document-note" aria-live="polite">Generate a saved BOQ to prepare draft purchase orders.</p>
+        <p class="purchasing-instructions">Each PDF has the saved BOQ quantity, rate and amount prefilled. Complete the buyer and supplier, delivery dates/address, notes and approval fields in the PDF. No supplier is selected and no order is sent automatically.</p>
+        <p id="purchasing-empty" class="purchasing-empty">There are no saved BOQ items to prepare. Generate the house and documents first.</p>
+        <div class="table-scroll"><table class="purchasing-table"><thead><tr><th>BOQ item &amp; description</th><th>Gross quantity</th><th>Unit</th><th>Unit rate</th><th>Amount</th><th>Draft order</th></tr></thead><tbody id="purchasing-body"></tbody><tfoot><tr><th colspan="4">Saved BOQ subtotal</th><td id="purchasing-total">&mdash;</td><td></td></tr></tfoot></table></div>
+        <p class="document-note">Draft quantities retain the saved BOQ gross quantities and units, including their coat and wastage allowances. Pack sizes, litres and other purchasing conversions are not inferred. Every draft identifies its source revision.</p>
+      </div>
       <div id="panel-rates" class="view-panel document-panel rates-panel" role="tabpanel" aria-labelledby="tab-rates" hidden>
         <div class="document-heading"><div><h3>Shared rate library</h3><p>Read-only library rates with editable design overrides. Edit the project rates/rates_aud.csv, or the active CSV supplied with --rates, then refresh.</p></div><button id="refresh-rate-library" type="button" class="secondary-button">Refresh rate library</button></div>
         <p id="rate-library-hash" class="library-fingerprint">Current server library has not been loaded.</p>
@@ -168,7 +178,7 @@
         </div>
         <p class="comparison-basis">Estimate difference using the saved BOQs and their recorded unit rates. Demolition, rework, disruption, programme effects, fees and taxes are excluded unless separately priced. This is a cost comparison for review, not an approved contract variation.</p>
       </div>
-      <div class="metrics-row" aria-label="Current house quantities"><div class="metric"><span>Internal floor area</span><strong id="metric-floor">- <small>m²</small></strong></div><div class="metric"><span>Net wall area before coats</span><strong id="metric-paint">- <small>m²</small></strong></div><div class="metric"><span>Doors &amp; windows</span><strong id="metric-openings">-</strong></div><div class="metric cost-metric"><span>BOQ subtotal</span><strong id="metric-cost">-</strong></div></div>
+      <div class="metrics-row" aria-label="Current house quantities"><div class="metric"><span>Clear floor finish area</span><strong id="metric-floor">- <small>m²</small></strong></div><div class="metric"><span>Net wall area before coats</span><strong id="metric-paint">- <small>m²</small></strong></div><div class="metric"><span>Doors &amp; windows</span><strong id="metric-openings">-</strong></div><div class="metric cost-metric"><span>BOQ subtotal</span><strong id="metric-cost">-</strong></div></div>
       <section class="download-bar" aria-label="Download current documents"><div><span class="download-heading">Your coordinated document set</span><p id="download-revision">Available after the house has been generated.</p></div><div class="download-links"><a data-file="boq_xlsx" class="download-link disabled" aria-disabled="true"><span class="file-icon">XLS</span>BOQ</a><a data-file="specification_pdf" class="download-link disabled" aria-disabled="true"><span class="file-icon">PDF</span>Specification</a><a data-file="drawings_pdf" class="download-link disabled" aria-disabled="true"><span class="file-icon">PDF</span>Drawings</a><a data-file="ifc" class="download-link disabled" aria-disabled="true"><span class="file-icon">IFC</span>Model</a></div></section>
       <footer class="workspace-footer">Concept study · Modelled scope only; rate sources and dates are recorded · All dimensions in generated drawings are in millimetres.</footer>
     </section>

@@ -7,7 +7,9 @@ import json
 import threading
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -174,6 +176,52 @@ def test_http_build_and_download_share_published_revision(http_application):
     status, body, _ = request("GET", "/api/state")
     assert status == 200
     assert json.loads(body)["revision"] == result["revision"]
+
+
+def test_maximum_room_metadata_and_allowances_fit_the_combined_import_boundary(http_application):
+    _, request, _ = http_application
+    emoji = "\U0001f3e0"
+    settings = HouseSettings().model_dump(mode="json")
+    # Unmatched room metadata is deliberately retained when topology changes.
+    # All 200 records and all 100 quote allowances may coexist in a valid file.
+    settings["rooms"] = [{"id": f"ROOM{index}", "name": emoji * 120,
+                          "finishes": dict.fromkeys(("floor", "ceiling", "skirting", "paint"), emoji * 120)}
+                         for index in range(1, 201)]
+    settings["allowances"] = [{"id": f"AL{index}", "kind": "prime_cost", "description": emoji * 240,
+                               "amount": 1, "note": emoji * 1000} for index in range(1, 101)]
+    settings["builder_pricing"]["builder_name"] = emoji * 120
+    settings["builder_pricing"]["client_description"] = emoji * 2000
+    encoded_size = len(json.dumps(settings).encode("utf-8"))
+    assert 2_097_152 < encoded_size < server.MAX_BODY <= 4_194_304
+    status, body, _ = request("POST", "/api/build", settings)
+    assert status == 200
+    saved = json.loads(body)
+    assert len(saved["settings"]["rooms"]) == 200
+    assert len(saved["settings"]["allowances"]) == 100
+
+
+def test_http_purchase_orders_use_the_selected_saved_revision(http_application, tmp_path, fake_exports):
+    application, request, _ = http_application
+    _, body, _ = request("POST", "/api/build", {"rate_overrides": {"FLOOR": 120}})
+    revision = json.loads(body)["revision"]
+    request("POST", "/api/build", {"length_mm": 12000})
+    original = application.read_revision(revision)
+    application.rate_library_path = tmp_path / "unavailable.csv"
+    prefix = f"/purchase-orders/{revision}"
+    status, pdf, headers = request("GET", prefix + "/FLOOR.pdf")
+    assert status == 200 and pdf.startswith(b"%PDF-")
+    assert headers["Content-Type"] == "application/pdf"
+    assert headers["Content-Disposition"] == f'attachment; filename="PO-{revision}-FLOOR.pdf"'
+    status, bundle, headers = request("GET", prefix + "/all.zip")
+    assert status == 200 and headers["Content-Type"] == "application/zip"
+    with ZipFile(BytesIO(bundle)) as archive:
+        assert set(archive.namelist()) == {f"PO-{revision}-{item['code']}.pdf" for item in original["boq"]}
+    assert application.read_revision(revision) == original
+    assert len(fake_exports["builds"]) == 2
+    for path in (prefix + "/ABSENT.pdf", prefix + "/%2e%2e/latest.json", prefix + "/%2F.pdf",
+                 "/purchase-orders/bad/FLOOR.pdf", "/purchase-orders/aaaaaaaaaaaa/all.zip"):
+        status, _, _ = request("GET", path)
+        assert status == 404
 
 
 def test_http_rates_and_invalid_library_leave_issued_revision_available(http_application, tmp_path):
@@ -368,3 +416,16 @@ def test_shutdown_requires_an_explicit_trusted_request(http_application):
     status, body, _ = request("POST", "/api/shutdown", {"application": "House Sync"})
     assert status == 200
     assert json.loads(body)["status"] == "stopping"
+
+
+def test_partition_preview_returns_rooms_before_access_is_resolved_without_publication(http_application, fake_exports):
+    application, request, _ = http_application
+    draft = HouseSettings().model_dump(mode="json")
+    draft["partitions"] = [{"id": "P1", "start_mm": [4000, 0], "end_mm": [4000, 8000],
+                            "height_mm": 3000, "thickness_mm": 100, "wall_type": "partition"}]
+    status, body, _ = request("POST", "/api/layout", draft)
+    preview = json.loads(body)
+    assert status == 200
+    assert sorted(room["area_m2"] for room in preview["rooms"]) == [31.6, 47.6]
+    assert any("unreachable" in error for error in preview["checks"]["errors"])
+    assert not fake_exports["builds"] and application.revisions() == []

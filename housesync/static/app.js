@@ -15,8 +15,19 @@ const legacyOpenings = () => [
 let draftOpenings = legacyOpenings();
 let draftAllowances = [];
 const reservedAllowanceIds = new Set();
+const interiorSettings = settings => ({
+  partitions: structuredClone((settings.partitions ?? []).map(wall => ({
+    thickness_mm: 100, height_mm: 3000, wall_type: 'partition', ...wall,
+  }))),
+  rooms: (settings.rooms ?? []).map(room => ({
+    id: room.id, name: room.name,
+    finishes: Object.fromEntries(Object.entries(room.finishes ?? {}).filter(([, value]) => value != null && value !== '')),
+  })),
+  min_room_width_mm: settings.min_room_width_mm ?? 900,
+});
+let draftInterior = interiorSettings({});
 const stableSettings = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-const comparableSettings = settings => normalizeBoqSettings({ ...settings, openings: settings.openings ?? legacyOpenings() });
+const comparableSettings = settings => normalizeBoqSettings({ ...settings, ...interiorSettings(settings), openings: settings.openings ?? legacyOpenings() });
 const comparison = { revisions: [], result: null, busy: false, request: 0, refresh: 0, selection: 0 };
 const rateLibraryState = { current: null, error: '', request: 0, busy: false };
 const overrideFields = Object.fromEntries(RATE_ITEMS.map(([code]) => [code, '#override-' + code.toLowerCase().replaceAll('_', '-')]));
@@ -27,13 +38,14 @@ const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefine
 const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), builder_pricing: { overhead_margin_percent: Number($('#quote-markup').value), admin_fee_aud: Number($('#quote-admin').value), gst_percent: 10, credit_treatment: $('#quote-credit-treatment').value, validity_days: Number($('#quote-validity').value), builder_name: $('#builder-name').value.trim(), client_description: $('#client-description').value.trim().replaceAll('\r\n', '\n') }, allowances: draftAllowances.map(item => ({ ...item, description: item.description.trim().replaceAll('\r\n', '\n'), note: item.note.trim().replaceAll('\r\n', '\n') })) };
+  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), ...interiorSettings(draftInterior), builder_pricing: { overhead_margin_percent: Number($('#quote-markup').value), admin_fee_aud: Number($('#quote-admin').value), gst_percent: 10, credit_treatment: $('#quote-credit-treatment').value, validity_days: Number($('#quote-validity').value), builder_name: $('#builder-name').value.trim(), client_description: $('#client-description').value.trim().replaceAll('\r\n', '\n') }, allowances: draftAllowances.map(item => ({ ...item, description: item.description.trim().replaceAll('\r\n', '\n'), note: item.note.trim().replaceAll('\r\n', '\n') })) };
 }
 
 function fillForm(settings) {
   settings = normalizeBoqSettings(settings);
   draftOpenings = structuredClone(settings.openings ?? legacyOpenings());
   draftAllowances = structuredClone(settings.allowances); for (const item of draftAllowances) reservedAllowanceIds.add(item.id);
+  draftInterior = interiorSettings(settings);
   if (settings.currency && ![...$('#currency').options].some(option => option.value === settings.currency)) {
     const option = document.createElement('option'); option.value = settings.currency; option.textContent = settings.currency; $('#currency').append(option);
   }
@@ -148,6 +160,7 @@ function setDownloadLinks() {
     else { link.removeAttribute('href'); link.removeAttribute('download'); link.tabIndex = -1; }
   });
   $('#save-settings').disabled = !state.result || state.dirty || state.busy;
+  setPurchaseOrderLinks();
 }
 
 function resultReceived(result, populate = false) {
@@ -166,7 +179,7 @@ function resultReceived(result, populate = false) {
   $('#download-revision').textContent = `Revision ${result.revision} · generated together`;
   $('#model-dimensions').textContent = `${number(result.settings.length_mm / 1000, 1)} × ${number(result.settings.width_mm / 1000, 1)} m clear`;
   const quantities = result.quantities || {};
-  metric('#metric-floor', quantities.floor_area_m2, 'm²');
+  metric('#metric-floor', quantities.floor_finish_area_m2 ?? quantities.floor_area_m2, 'm²');
   metric('#metric-paint', quantities.paint_area_m2, 'm²');
   $('#metric-openings').textContent = `${quantities.door_count ?? 1} door · ${quantities.window_count ?? 2} windows`;
   const currency = result.totals?.currency || result.settings.currency;
@@ -174,6 +187,7 @@ function resultReceived(result, populate = false) {
   $('#metric-cost').textContent = money(total, currency);
   $('#boq-total').textContent = money(total, currency);
   renderBOQ(result);
+  renderPurchasing(result);
   renderSpec(result);
   renderRates();
   updateOverrideHints();
@@ -185,6 +199,68 @@ function resultReceived(result, populate = false) {
   if (libraryDiffersFromRevision()) setDirty(false);
   void refreshComparisons(result, previousRevision, !populate);
   void refreshRateLibrary();
+}
+
+function setPurchaseOrderLinks() {
+  const result = state.result;
+  const rows = Array.isArray(result?.boq) ? result.boq : [];
+  const ready = Boolean(result?.revision && rows.length && !state.dirty && !state.busy);
+  document.querySelectorAll('[data-purchase-order-code]').forEach(link => {
+    const code = link.dataset.purchaseOrderCode;
+    const hasItem = code === 'all' || rows.some(row => row.code === code);
+    const enabled = Boolean(ready && hasItem && link.dataset.sourceRevision === result.revision);
+    link.classList.toggle('disabled', !enabled);
+    link.setAttribute('aria-disabled', String(!enabled));
+    if (enabled) {
+      link.href = `/purchase-orders/${encodeURIComponent(result.revision)}/${code === 'all' ? 'all.zip' : encodeURIComponent(code) + '.pdf'}`;
+      link.setAttribute('download', ''); link.tabIndex = 0;
+    } else {
+      link.removeAttribute('href'); link.removeAttribute('download'); link.tabIndex = -1;
+    }
+  });
+  $('#purchasing-status').textContent = !result?.revision || !rows.length
+    ? 'Generate a saved BOQ to prepare draft purchase orders.'
+    : state.busy ? 'Updating house and documents. Purchase order downloads will be available when the revision is saved.'
+    : state.dirty ? 'Pending edits: update house & documents before downloading purchase orders.'
+    : `Draft purchase orders use saved revision ${result.revision}. Complete the PDF fields and review before issue.`;
+}
+
+function renderPurchasing(result) {
+  const rows = Array.isArray(result?.boq) ? result.boq : [];
+  const currency = result?.totals?.currency || result?.settings?.currency || '';
+  const recordedNumber = (value, digits) => value === undefined || value === null ? 'Not recorded' : Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+  const recordedMoney = value => value === undefined || value === null ? 'Not recorded' : currency ? money(value, currency) : `${number(value)} (currency not recorded)`;
+  const recordedRate = value => value === undefined || value === null ? 'Not recorded' : `${currency || '(currency not recorded)'} ${recordedNumber(value, 20)}`;
+  const body = $('#purchasing-body'); body.replaceChildren();
+  $('#purchasing-revision').textContent = result?.revision ? `Source revision ${result.revision}` : 'No saved revision';
+  $('#purchasing-count').textContent = `${rows.length} draft purchase order${rows.length === 1 ? '' : 's'}`;
+  $('#purchasing-empty').hidden = Boolean(rows.length);
+  $('#purchasing-total').textContent = rows.length ? recordedMoney(result?.totals?.subtotal) : '\u2014';
+  $('#purchase-orders-all').dataset.sourceRevision = result?.revision || '';
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    const item = document.createElement('td'); const code = document.createElement('strong'); code.textContent = row.code || 'Item code not recorded'; item.append(code);
+    const description = document.createElement('p'); description.textContent = row.description || 'Description not recorded'; item.append(description);
+    if (row.group_name) { const scope = document.createElement('small'); scope.textContent = 'Scope: ' + row.group_name; item.append(scope); }
+    if (row.rate_origin || row.rate_source || row.rate_effective_date) {
+      const basis = document.createElement('small'); basis.textContent = [row.rate_origin, row.rate_source, row.rate_effective_date].filter(Boolean).join(' | '); item.append(basis);
+    }
+    tr.append(item);
+    for (const value of [recordedNumber(row.gross_quantity ?? row.quantity, 6), row.unit || 'Not recorded', recordedRate(row.rate), recordedMoney(row.amount)]) {
+      const cell = document.createElement('td'); cell.textContent = value; tr.append(cell);
+    }
+    const action = document.createElement('td');
+    if (typeof row.code === 'string' && row.code) {
+      const link = document.createElement('a'); link.className = 'download-link disabled'; link.textContent = 'Download draft PO PDF';
+      link.dataset.purchaseOrderCode = row.code; link.dataset.sourceRevision = result?.revision || '';
+      link.setAttribute('aria-label', `Download ${row.code} draft purchase order PDF`);
+      link.setAttribute('aria-describedby', 'purchasing-status');
+      link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); });
+      action.append(link);
+    }
+    tr.append(action); body.append(tr);
+  }
+  setPurchaseOrderLinks();
 }
 
 function metric(selector, value, unit) {
@@ -286,18 +362,35 @@ async function refreshRateLibrary() {
 }
 
 function rateBasis(row, result) {
-  const origin = row.rate_origin || (Object.hasOwn(comparableSettings(result.settings).rate_overrides, row.code) ? 'override' : result.rate_library ? 'library' : 'legacy');
+  const origin = row.rate_origin || (Object.hasOwn(comparableSettings(result.settings).rate_overrides, row.rate_code ?? row.code) ? 'override' : result.rate_library ? 'library' : 'legacy');
   return [origin === 'override' ? 'Override' : origin === 'library' ? 'Library' : 'Saved legacy rate', row.rate_source, row.rate_effective_date].filter(Boolean).join(' | ');
 }
 
 function renderBOQ(result) {
   const body = $('#boq-body');
   body.replaceChildren();
-  for (const row of result.boq || []) {
+  const line = row => {
     const tr = document.createElement('tr');
     const values = [row.code, row.description, number(row.net_quantity ?? row.quantity, 3), `${number(row.wastage_percent ?? 0)}%`, number(row.gross_quantity ?? row.quantity, 3), row.unit, number(row.rate), rateBasis(row, result), number(row.amount)];
     for (const value of values) { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); }
     body.append(tr);
+  };
+  if (result.boq_groups?.length) {
+    const grouped = new Map(result.boq_groups.map(group => [group.id, []]));
+    for (const row of result.boq) grouped.get(row.group_id)?.push(row);
+    for (const group of result.boq_groups) {
+      const tr = document.createElement('tr');
+      const title = document.createElement('th');
+      title.colSpan = 9; title.scope = 'rowgroup'; title.textContent = group.name;
+      tr.append(title); body.append(tr);
+      for (const row of grouped.get(group.id) ?? []) line(row);
+      const subtotal = document.createElement('tr');
+      const label = document.createElement('th'); label.colSpan = 8; label.textContent = group.name + ' subtotal';
+      const value = document.createElement('td'); value.textContent = money(group.subtotal, result.settings.currency);
+      subtotal.append(label, value); body.append(subtotal);
+    }
+  } else {
+    for (const row of result.boq || []) line(row);
   }
   $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', 'Rate basis identifies each saved item as library or design override, with its recorded source and effective date. The subtotal covers only modelled scope.'].join(' ');
 }
@@ -317,15 +410,21 @@ function renderSpec(result) {
     return part;
   };
   section('01 · Scope & setting out', [`Single-storey rectangular house with clear internal dimensions of ${number(settings.length_mm, 0)} × ${number(settings.width_mm, 0)} mm. Wall height ${number(settings.height_mm, 0)} mm; wall thickness ${number(settings.wall_thickness_mm, 0)} mm.`, 'Refer to the coordinated floor plan and elevations for element locations and overall dimensions.']);
-  const finish = section('02 · Wall finish', [`Selected paint: ${settings.paint_colour}. Colour reference ${settings.paint_hex}. Apply the coordinated finish to the internal and external wall faces identified by this model.`, 'Confirm the manufacturer, product, substrate preparation, primer and coating system before construction.']);
+  const finish = section('02 · Wall finish', [`Selected paint: ${settings.paint_colour}. Colour reference ${settings.paint_hex}. This is the exterior and default interior finish. Room paint overrides are listed in the room finishes schedule.`, 'Confirm the manufacturer, product, substrate preparation, primer and coating system before construction.']);
   const colour = document.createElement('span'); colour.className = 'spec-colour'; colour.style.backgroundColor = settings.paint_hex; finish.querySelector('p').prepend(colour);
-  const paint = result.boq?.find(row => row.code === 'PAINT');
+  const paint = result.partitions?.length ? null : result.boq?.find(row => row.code === 'PAINT');
   if (paint?.net_quantity !== undefined) { const paragraph = document.createElement('p'); paragraph.textContent = `${number(paint.measured_quantity, 3)} m2 measured net wall area x ${settings.paint_coats} coats = ${number(paint.net_quantity, 3)} m2 before ${number(paint.wastage_percent)}% wastage; priced gross quantity ${number(paint.gross_quantity, 3)} m2.`; finish.append(paragraph); }
   const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high; start ${number(opening.start_mm, 0)} mm from the host inner reference${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
   section('03 · Openings', openingDescriptions.length ? openingDescriptions : ['No doors or windows are included in this saved revision.']);
   const trades = new Set(['FLOOR_FINISH', 'CEILING', 'SKIRTING', 'INTERNAL_PLASTER', 'EXTERNAL_RENDER']);
-  for (const row of result.boq || []) if (trades.has(row.code)) {
-    section(row.code.replaceAll('_', ' ').toLowerCase(), [row.description, `Net ${number(row.net_quantity, 3)} ${row.unit}; wastage ${number(row.wastage_percent)}%; gross ${number(row.gross_quantity, 3)} ${row.unit}.`]);
+  if (result.rooms?.length) {
+    section('Room finishes schedule', result.rooms.map(room =>
+      `${room.name} (${room.id}) · ${number(room.area_m2)} m². ` +
+      Object.entries(room.finishes).map(([trade, value]) => `${trade}: ${value}`).join(' · ')));
+  }
+  for (const row of result.boq || []) if (trades.has(row.rate_code || row.code)) {
+    const trade = (row.rate_code || row.code).replaceAll('_', ' ').toLowerCase();
+    section(row.group_name ? row.group_name + ' · ' + trade : trade, [row.description, `Net ${number(row.net_quantity, 3)} ${row.unit}; wastage ${number(row.wastage_percent)}%; gross ${number(row.gross_quantity, 3)} ${row.unit}.`]);
   }
   section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use saved unit rates in ${settings.currency}, with each item recording its rate source and effective date. The subtotal covers only modelled scope. All issued files should retain design revision ${result.revision}.`]);
 }
@@ -654,7 +753,7 @@ function initializeViewer() {
       const hit = ray.intersectObjects(viewer.parts.filter(part => part.visible), false)[0];
       if (viewer.selected) viewer.selected.material.emissive.set(0x000000);
       viewer.selected = hit?.object || null;
-      if (viewer.selected) { viewer.selected.material.emissive.set(0x143d36); $('#selected-element').textContent = `${viewer.selected.userData.id} · ${viewer.selected.userData.kind}`; }
+      if (viewer.selected) { viewer.selected.material.emissive.set(0x143d36); $('#selected-element').textContent = `${viewer.selected.userData.id} · ${viewer.selected.userData.name || viewer.selected.userData.kind}`; }
       else $('#selected-element').textContent = 'Select an element to inspect';
     });
     resetCamera();
@@ -686,11 +785,25 @@ function renderModel(mesh) {
   for (const item of mesh?.objects || []) {
     if (!item.vertices?.length || !item.faces?.length) continue;
     const vertices = Array.isArray(item.vertices[0]) ? item.vertices.flat() : item.vertices;
-    const faces = Array.isArray(item.faces[0]) ? item.faces.flat() : item.faces;
+    let faces = Array.isArray(item.faces[0]) ? item.faces.flat() : item.faces;
+    const isRoom = item.kind === 'space';
+    if (isRoom) {
+      // Pick the floor footprint without covering the walls or their openings.
+      let floorZ = Infinity;
+      for (let i = 2; i < vertices.length; i += 3) floorZ = Math.min(floorZ, vertices[i]);
+      const floorFaces = [];
+      for (let i = 0; i < faces.length; i += 3) {
+        const triangle = faces.slice(i, i + 3);
+        if (triangle.every(index => Math.abs(vertices[3 * index + 2] - floorZ) < 1e-6)) floorFaces.push(...triangle);
+      }
+      faces = floorFaces;
+    }
     const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(faces); geometry.computeVertexNormals();
     const isGlass = /glaz|glass/i.test(`${item.kind} ${item.id}`);
-    const material = new THREE.MeshStandardMaterial({ color: item.colour || '#d5ded6', roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass, opacity: isGlass ? .48 : 1 });
-    const part = new THREE.Mesh(geometry, material); part.userData = { id: item.id, kind: item.kind }; part.castShadow = !isGlass; part.receiveShadow = true;
+    const material = new THREE.MeshStandardMaterial({ color: item.colour || '#d5ded6', roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass || isRoom, opacity: isRoom ? .38 : isGlass ? .48 : 1 });
+    const part = new THREE.Mesh(geometry, material); part.userData = { id: item.id, kind: item.kind, name: isRoom ? (state.result?.rooms?.find(room => room.id === item.id)?.name || item.name) : null };
+    if (isRoom) part.position.z = .003;
+    part.castShadow = !isGlass && !isRoom; part.receiveShadow = true;
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 35), new THREE.LineBasicMaterial({ color: 0x485e55, transparent: true, opacity: .18 })); part.add(edges);
     viewer.parts.push(part); viewer.group.add(part);
   }
@@ -733,6 +846,7 @@ function showView(name) {
 document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => showView(button.dataset.panel)));
 
 document.querySelectorAll('[data-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
+$('#purchase-orders-all').addEventListener('click', event => { if (event.currentTarget.getAttribute('aria-disabled') === 'true') event.preventDefault(); });
 $('#roof-toggle').addEventListener('change', roofVisibility);
 $('#reset-camera').addEventListener('click', resetCamera);
 $('#save-settings').addEventListener('click', () => {
@@ -745,7 +859,7 @@ $('#load-settings').addEventListener('change', async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 2097152) throw new Error('Please choose a House Sync design JSON no larger than 2 MiB.');
+    if (file.size > 4194304) throw new Error('Please choose a House Sync design JSON no larger than 4 MiB.');
     const parsed = JSON.parse(await file.text()); const settings = parsed.settings || parsed;
     if (!settings.project_name || !Number.isFinite(settings.length_mm) || !Number.isFinite(settings.width_mm) || !Number.isFinite(settings.height_mm) || !Number.isFinite(settings.wall_thickness_mm) || !/^#[0-9a-f]{6}$/i.test(settings.paint_hex)) throw new Error('This file is missing valid house dimensions or a paint colour.');
     if (settings.allowances !== undefined && !Array.isArray(settings.allowances)) throw new Error('Allowances must be a list of PC/PS items.');
@@ -761,6 +875,9 @@ function initialFormLoading(value) {
 }
 
 planEditor = new PlanEditor($('#plan-editor'), {
+  previewLayout: settings => fetchJSON('/api/layout', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings),
+  }),
   onChange(settings) { if (state.busy) return; fillForm(settings); setDirty(false); },
   onApply() { void buildHouse(); },
   onReviewSaved() { showView('changes'); },

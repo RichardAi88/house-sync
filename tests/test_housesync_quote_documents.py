@@ -158,3 +158,75 @@ def test_client_renderer_rejects_structured_or_non_text_scope(value, quote_compa
     public["scope"] = [value]
     with pytest.raises(ValueError, match="plain strings"):
         client_variation_quote_pdf(public)
+
+
+def test_room_owned_item_names_and_opaque_codes_survive_internal_quote_with_mixed_credits(quote_comparison):
+    before, after, _ = quote_comparison
+    for snapshot, name in ((before, "Living & Dining"), (after, "Family & Lounge")):
+        snapshot["boq"][0].update(code="OPAQUE_ITEM_A001", rate_code="FLOOR_FINISH", group_id="ROOM_4454ED183E07", group_name=name)
+    old_credit = {"code": "OPAQUE_ITEM_B002", "rate_code": "CEILING", "group_id": "ROOM_C791B2055E05", "group_name": "Studio",
+                  "description": "PRIVATE_CEILING_COST_BASIS", "quantity": 1, "unit": "m2", "rate": 1000, "amount": 1000}
+    new_credit = {**old_credit, "rate": 500, "amount": 500}
+    before["boq"].append(old_credit)
+    after["boq"].append(new_credit)
+    before["totals"]["subtotal"] += 1000
+    after["totals"]["subtotal"] += 500
+    after["settings"]["builder_pricing"]["client_description"] = "Revise the Living & Dining area to the Family & Lounge arrangement."
+    comparison = compare_revisions(before, after)
+    comparison["quote"] = build_variation_quote(before, after, comparison, "2026-11-18")
+    internal = _pdf_text(internal_variation_breakdown_pdf(comparison["quote"]["internal"], comparison))
+    for expected in ("Living & Dining", "Family & Lounge", "Studio", "ROOM_4454ED183E07", "ROOM_C791B2055E05",
+                     "OPAQUE_ITEM_A001", "OPAQUE_ITEM_B002", "A rate basis: FLOOR_FINISH", "B rate basis: CEILING"):
+        assert expected in internal
+    client = _pdf_text(client_variation_quote_pdf(comparison["quote"]["public"]))
+    assert "Family & Lounge" in client and "AUD -500.00" in client
+    assert "AUD 10,584.20" in client
+    for hidden in ("OPAQUE_ITEM_A001", "OPAQUE_ITEM_B002", "ROOM_4454ED183E07", "PRIVATE_CEILING_COST_BASIS", "PRIVATE_SOURCE_SENTINEL"):
+        assert hidden not in client
+
+
+def test_room_paint_purchase_order_uses_saved_row_identity_revision_and_coated_quantity(quote_comparison):
+    from housesync.purchasing import purchase_order_pdf
+
+    result = deepcopy(quote_comparison[1])
+    code = "OPAQUE_ROOM_PURCHASING_ITEM"
+    result["partitions"] = [{"id": "P1"}]
+    result["boq"] = [{"code": code, "rate_code": "PAINT", "group_id": "ROOM_4454ED183E07", "group_name": "Family & Lounge",
+                       "description": "Selected wall paint finish", "measured_quantity": 12.345, "paint_coats": 2,
+                       "net_quantity": 24.69, "wastage_percent": 10, "gross_quantity": 27.159, "quantity": 27.159,
+                       "unit": "m2", "rate": 11.125, "amount": 302.14, "rate_origin": "override", "rate_source": "Project allowance"}]
+    text = _pdf_text(purchase_order_pdf(result, code))
+    for expected in (f"PO-{result['revision']}-{code}", "Family & Lounge", "27.159", "12.345", "24.69", "11.125", "302.14",
+                     "m2-per-coat", "No conversion to litres", "Saved design revision: " + result["revision"]):
+        assert expected in text
+
+
+def test_internal_regrouping_bridge_preserves_saved_commercial_basis_without_client_leakage(quote_comparison):
+    comparison = quote_comparison[2]
+    internal = comparison["quote"]["internal"]
+    internal["pricing_movements"] = [{"kind": "boq", "rate_code": "FLOOR_FINISH", "finish": "PRIVATE_TIMBER_FINISH",
+                                       "before_amount": 100, "after_amount": 8410, "cost_delta": 8310,
+                                       "source_codes": ["OPAQUE_OLD_ITEM", "OPAQUE_NEW_ITEM"], "regrouped": True}]
+    internal["regrouping_reconciliations"] = [{
+        "rate_code": "FLOOR_FINISH", "finish": "PRIVATE_TIMBER_FINISH", "unit": "m2", "basis_mode": "homogeneous",
+        "before_amount": 100, "after_amount": 8410, "cost_delta": 8310,
+        "source_codes": ["OPAQUE_OLD_ITEM", "OPAQUE_NEW_ITEM"], "reason": "PRIVATE_REGROUPING_REASON",
+        "source_lines": [
+            {"side": "before", "code": "OPAQUE_OLD_ITEM", "group_id": "ROOM_OLD", "group_name": "Archived living room",
+             "amount": 100, "rate": 100, "rate_origin": "library", "rate_source": "PRIVATE_OLD_SOURCE", "rate_effective_date": "2026-11-17"},
+            {"side": "after", "code": "OPAQUE_NEW_ITEM", "group_id": "ROOM_NEW", "group_name": "Proposed living room",
+             "amount": 8410, "rate": 8410, "rate_origin": "override", "rate_source": "PRIVATE_NEW_SOURCE", "rate_effective_date": "2026-11-18"},
+        ]}]
+    original = deepcopy(comparison)
+    rendered = internal_variation_breakdown_pdf(internal, comparison)
+    text = _pdf_text(rendered)
+    for expected in ("Commercial BOQ movements", "Regrouping: FLOOR_FINISH", "PRIVATE_TIMBER_FINISH", "PRIVATE_REGROUPING_REASON",
+                     "OPAQUE_OLD_ITEM", "OPAQUE_NEW_ITEM", "Archived living room", "Proposed living room", "ROOM_OLD", "ROOM_NEW",
+                     "PRIVATE_OLD_SOURCE", "PRIVATE_NEW_SOURCE", "Pricing basis: homogeneous", "commercial movement AUD 8,310.00"):
+        assert expected in text
+    client = client_variation_quote_pdf(comparison["quote"]["public"])
+    for hidden in ("OPAQUE_OLD_ITEM", "OPAQUE_NEW_ITEM", "PRIVATE_TIMBER_FINISH", "PRIVATE_REGROUPING_REASON", "PRIVATE_NEW_SOURCE"):
+        assert hidden.encode() not in client
+    frozen = json.loads(json.dumps(comparison, sort_keys=True))
+    assert rendered == internal_variation_breakdown_pdf(frozen["quote"]["internal"], frozen)
+    assert comparison == original
