@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import math
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -36,6 +37,7 @@ FIELD_LABELS = {
     "width_mm": ("Internal width", "dimensions"),
     "height_mm": ("Wall height", "dimensions"),
     "wall_thickness_mm": ("Wall thickness", "dimensions"),
+    "min_room_width_mm": ("Minimum room width", "geometry_rules"),
     "paint_colour": ("Paint finish", "finish"),
     "paint_hex": ("Paint colour reference", "finish"),
     "currency": ("Currency", "pricing"),
@@ -115,9 +117,11 @@ def _comparison_settings(settings: dict) -> dict:
     the original five rates and saved amounts remain exactly as recorded.
     """
     defaults = HouseSettings().model_dump(mode="json")
-    normalised = {key: value for key, value in settings.items() if key not in {"openings", "rates", "rate_overrides"}}
+    normalised = {key: value for key, value in settings.items()
+                  if key not in {"openings", "partitions", "rooms", "rates", "rate_overrides"}}
     for field in ("paint_coats", "rate_source", "rate_date"):
         normalised.setdefault(field, defaults[field])
+    normalised.setdefault("min_room_width_mm", defaults.get("min_room_width_mm", 900))
     normalised["wastage"] = {**defaults["wastage"], **settings.get("wastage", {})}
     # Legacy rate inputs become explicit absolute overrides, not library rates.
     # Compare their canonical meaning rather than their historical JSON shape.
@@ -159,10 +163,12 @@ def _library_changes(before: dict, after: dict) -> list[dict]:
 def _rate_facts(result: dict, row: dict | None) -> dict:
     if row is None:
         return {"origin": None, "source": None, "effective_date": None, "library_rate": None}
-    entry = _saved_library(result).get("rows", {}).get(row["code"], {})
+    rate_code = row.get("rate_code", row["code"])
+    entry = _saved_library(result).get("rows", {}).get(rate_code, {})
     origin = row.get("rate_origin")
     if origin not in {"library", "override"}:
-        origin = "override" if row["code"] in _comparison_settings(result["settings"])["rate_overrides"] else None
+        overrides = _comparison_settings(result["settings"])["rate_overrides"]
+        origin = "override" if row["code"] in overrides or rate_code in overrides else None
     return {"origin": origin, "source": row.get("rate_source", result["settings"].get("rate_source")),
             "effective_date": row.get("rate_effective_date", result["settings"].get("rate_date")),
             "library_rate": row.get("library_rate", entry.get("rate")),
@@ -216,7 +222,9 @@ def _provenance_rows(before: dict, after: dict, old_rows: dict, new_rows: dict, 
     affected = {item["code"]: item for item in items}
     result = []
     for code in dict.fromkeys([*old_rows, *new_rows]):
-        row = {"code": code}
+        item = new_rows.get(code) or old_rows[code]
+        row = {"code": code, "rate_code": item.get("rate_code", code),
+               "group_id": item.get("group_id"), "group_name": item.get("group_name")}
         for label, snapshot, source in (("before", before, old_rows), ("after", after, new_rows)):
             item = source.get(code)
             row[label] = ({**_rate_facts(snapshot, item), "rate": _float(item["rate"]), "unit": item["unit"],
@@ -291,6 +299,173 @@ LEGACY_OPENINGS = (
 WALL_LABELS = {"W1": "south, eastwards", "W2": "east, northwards", "W3": "north, westwards", "W4": "west, southwards"}
 
 
+def _identity_order(identity: str) -> tuple[str, int, str]:
+    match = re.fullmatch(r"([A-Z]+)([0-9]+)", identity)
+    return (match[1], int(match[2]), "") if match else (identity, 0, identity)
+
+
+def _point(value: Any, name: str) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{name} must contain two coordinates")
+    return tuple(float(_decimal(coordinate, name)) for coordinate in value)
+
+
+def _point_text(value: Any) -> str:
+    return f"({_text(value[0])}, {_text(value[1])}) mm"
+
+
+ROOM_ID = re.compile(r"ROOM(?:[1-9][0-9]*|_[0-9A-F]{12})")
+
+
+def _partitions(settings: dict) -> dict[str, dict]:
+    source = settings.get("partitions", [])
+    if not isinstance(source, (list, tuple)):
+        raise ValueError("Saved partitions must be a list")
+    result = {}
+    for partition in source:
+        if not isinstance(partition, dict) or not isinstance(partition.get("id"), str) or not re.fullmatch(r"P[1-9][0-9]*", partition["id"]):
+            raise ValueError("Saved partitions require stable P element IDs")
+        identity = partition["id"]
+        if identity in result:
+            raise ValueError(f"Saved partitions have duplicate element ID {identity}")
+        start = _point(partition.get("start_mm"), f"Saved partition {identity} start")
+        end = _point(partition.get("end_mm"), f"Saved partition {identity} end")
+        if start == end:
+            raise ValueError(f"Saved partition {identity} must have positive length")
+        for field in ("thickness_mm", "height_mm"):
+            if partition.get(field) is not None and _decimal(partition[field], f"Saved partition {identity} {field}") <= 0:
+                raise ValueError(f"Saved partition {identity} must have positive {field}")
+        result[identity] = {**partition, "start_mm": start, "end_mm": end}
+    return result
+
+
+def _partition_description(partition: dict) -> str:
+    dimensions = ", ".join(f"{_text(partition[field])} mm {label}"
+                           for field, label in (("thickness_mm", "thick"), ("height_mm", "high"))
+                           if partition.get(field) is not None)
+    kind = f"; wall type {partition['wall_type']}" if partition.get("wall_type") else ""
+    return (f"Partition {partition['id']} from {_point_text(partition['start_mm'])} to {_point_text(partition['end_mm'])}"
+            + (f"; {dimensions}" if dimensions else "") + kind)
+
+
+def _partition_changes(before: dict, after: dict) -> list[dict]:
+    old_rows, new_rows = _partitions(before), _partitions(after)
+    changes = []
+    for identity in sorted(old_rows.keys() | new_rows.keys(), key=_identity_order):
+        old, new = old_rows.get(identity), new_rows.get(identity)
+        common = {"category": "partitions", "element_id": identity}
+        if old is None or new is None:
+            added = old is None
+            changes.append({**common, "field": f"partitions.{identity}", "label": f"Partition {identity}", "before": old, "after": new,
+                            "description": f"{'Added' if added else 'Removed'} {_partition_description(new if added else old)}.",
+                            "status": "added" if added else "removed"})
+            continue
+        for field, label in (("start_mm", "start"), ("end_mm", "end"), ("thickness_mm", "thickness"),
+                             ("height_mm", "height"), ("wall_type", "wall type")):
+            left, right = old.get(field), new.get(field)
+            if left == right:
+                continue
+            old_text, new_text = (_point_text(value) for value in (left, right)) if field in {"start_mm", "end_mm"} else (
+                _text(left) + (" mm" if field.endswith("_mm") else ""), _text(right) + (" mm" if field.endswith("_mm") else ""))
+            changes.append({**common, "field": f"partitions.{identity}.{field}", "label": f"Partition {identity} {label}",
+                            "before": left, "after": right, "description": f"Partition {identity} {label}: {old_text} to {new_text}.",
+                            "status": "modified"})
+    return changes
+
+
+def _room_rows(result: dict) -> dict[str, dict]:
+    """Read resolved saved rooms, retaining implicit ROOM1 for old snapshots."""
+    settings = result["settings"]
+    overrides = settings.get("rooms", [])
+    if not isinstance(overrides, (list, tuple)):
+        raise ValueError("Saved room overrides must be a list")
+    explicit = {}
+    for row in overrides:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not ROOM_ID.fullmatch(row["id"]):
+            raise ValueError("Saved room overrides require stable ROOM element IDs")
+        if row["id"] in explicit:
+            raise ValueError(f"Saved room overrides have duplicate ID {row['id']}")
+        explicit[row["id"]] = row
+    source = result.get("rooms")
+    if source is None:
+        legacy_finishes = {"floor": "Floor finish allowance", "ceiling": "Ceiling allowance", "skirting": "Skirting allowance",
+                           "paint": f"{settings.get('paint_colour', 'Light blue')} ({settings.get('paint_hex', '#ADD8E6')})"}
+        source = [] if settings.get("partitions") else [{"id": "ROOM1", "name": "Room 1", "finishes": legacy_finishes}]
+    if not isinstance(source, (list, tuple)):
+        raise ValueError("Saved rooms must be a list")
+    rows = {}
+    for row in source:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not ROOM_ID.fullmatch(row["id"]):
+            raise ValueError("Saved rooms require stable ROOM element IDs")
+        identity = row["id"]
+        if identity in rows:
+            raise ValueError(f"Saved rooms have duplicate ID {identity}")
+        override = explicit.get(identity, {})
+        finishes = row.get("finishes") or {}
+        if not isinstance(finishes, dict) or not isinstance(override.get("finishes", {}), dict):
+            raise ValueError(f"Saved room {identity} finishes must be an object")
+        rows[identity] = {**row, "name": override.get("name") or row.get("name") or f"Room {identity[4:]}",
+                          "finishes": {**finishes, **{key: value for key, value in override.get("finishes", {}).items() if value is not None}},
+                          "_explicit_finishes": override.get("finishes", {}), "_explicit_name": override.get("name"), "_exists": True}
+    for identity, override in explicit.items():
+        if identity not in rows:
+            rows[identity] = {**override, "finishes": override.get("finishes", {}),
+                              "_explicit_finishes": override.get("finishes", {}), "_explicit_name": override.get("name"), "_exists": False}
+    return rows
+
+
+def _room_changes(before: dict, after: dict) -> list[dict]:
+    old_rows, new_rows = _room_rows(before), _room_rows(after)
+    changes = []
+    for identity in sorted(old_rows.keys() | new_rows.keys(), key=_identity_order):
+        old, new = old_rows.get(identity), new_rows.get(identity)
+        common = {"category": "rooms", "element_id": identity, "group_id": identity}
+        if old is None or new is None or old["_exists"] != new["_exists"]:
+            added = old is None or (new is not None and new["_exists"])
+            row = new if added else old
+            subject = "room" if row["_exists"] else "metadata for room"
+            changes.append({**common, "field": f"rooms.{identity}", "label": f"Room {identity}", "before": old, "after": new,
+                            "description": f"{'Added' if added else 'Removed'} {subject} {identity} ({row['name']}).",
+                            "status": "added" if added else "removed"})
+            continue
+        for field in ("name",):
+            # Default display numbers can shift when another room is added.
+            # Only an authored metadata edit is a rename of this stable ID.
+            if old.get(field) != new.get(field) and old["_explicit_name"] != new["_explicit_name"]:
+                changes.append({**common, "field": f"rooms.{identity}.{field}", "label": f"Room {identity} {field}",
+                                "before": old.get(field), "after": new.get(field),
+                                "description": f"Room {identity} {field}: {_text(old.get(field))} to {_text(new.get(field))}.", "status": "modified"})
+        for finish in sorted(old["finishes"].keys() | new["finishes"].keys()):
+            left, right = old["finishes"].get(finish), new["finishes"].get(finish)
+            # Recording inherited defaults for the first time is not a refinish.
+            if left == right or (left is None and new["_explicit_finishes"].get(finish) is None) or (
+                    right is None and old["_explicit_finishes"].get(finish) is None):
+                continue
+            changes.append({**common, "field": f"rooms.{identity}.finishes.{finish}", "label": f"Room {identity} {finish} finish",
+                            "before": left, "after": right,
+                            "description": f"Room {identity} {finish} finish: {_text(left) if left is not None else 'inherited'} to {_text(right) if right is not None else 'inherited'}.",
+                            "status": "modified"})
+        for field, label, unit in (("area_m2", "clear area", "m2"), ("perimeter_m", "internal perimeter", "m"),
+                                   ("outline_mm", "boundary", ""), ("holes_mm", "boundary holes", "")):
+            # Old single-room snapshots did not record room geometry separately.
+            if field not in old or field not in new or old[field] == new[field]:
+                continue
+            changes.append({**common, "field": f"rooms.{identity}.{field}", "label": f"Room {identity} {label}",
+                            "before": old[field], "after": new[field],
+                            "description": f"Room {identity} {label}: {_text(old[field])}{(' ' + unit) if unit else ''} to {_text(new[field])}{(' ' + unit) if unit else ''}.",
+                            "status": "modified"})
+    return changes
+
+
+def _host_label(settings: dict, host: str) -> str:
+    if host in WALL_LABELS:
+        return WALL_LABELS[host]
+    partition = _partitions(settings).get(host)
+    if partition is None:
+        raise ValueError(f"Saved opening host {host} does not exist")
+    return f"partition, authored start {_point_text(partition['start_mm'])} to end {_point_text(partition['end_mm'])}"
+
+
 def _openings(settings: dict) -> dict[str, dict]:
     """Normalise historical implicit openings without changing saved snapshots."""
     source = settings.get("openings", LEGACY_OPENINGS)
@@ -303,7 +478,7 @@ def _openings(settings: dict) -> dict[str, dict]:
         identity = opening["id"]
         if identity in result:
             raise ValueError(f"Saved openings have duplicate element ID {identity}")
-        if opening.get("kind") not in {"door", "window"} or opening.get("host") not in WALL_LABELS:
+        if opening.get("kind") not in {"door", "window"} or opening.get("host") not in (WALL_LABELS.keys() | _partitions(settings).keys()):
             raise ValueError(f"Saved opening {identity} has an invalid kind or host")
         for field in ("width_mm", "height_mm", "sill_mm"):
             number = _decimal(opening.get(field), f"Saved opening {identity} {field}")
@@ -318,7 +493,11 @@ def _openings(settings: dict) -> dict[str, dict]:
 def _opening_start(settings: dict, opening: dict) -> float | None:
     if opening["offset_mm"] is not None:
         return opening["offset_mm"]
-    span = settings.get("length_mm" if opening["host"] in {"W1", "W3"} else "width_mm")
+    if opening["host"].startswith("P"):
+        partition = _partitions(settings)[opening["host"]]
+        span = math.dist(partition["start_mm"], partition["end_mm"])
+    else:
+        span = settings.get("length_mm" if opening["host"] in {"W1", "W3"} else "width_mm")
     if span is None:
         return None
     return float((_decimal(span, "Saved wall span") - _decimal(opening["width_mm"], "Saved opening width")) / 2)
@@ -331,10 +510,21 @@ def _opening_position(settings: dict, opening: dict) -> str:
     return f"{_text(start)} mm start"
 
 
+def _partition_opening_point(settings: dict, opening: dict) -> tuple[float, float] | None:
+    if not opening["host"].startswith("P"):
+        return None
+    partition = _partitions(settings)[opening["host"]]
+    start, end = partition["start_mm"], partition["end_mm"]
+    offset = _opening_start(settings, opening)
+    span = math.dist(start, end)
+    return tuple(round(left + (right - left) * offset / span, 6) for left, right in zip(start, end, strict=True))
+
+
 def _opening_description(settings: dict, opening: dict) -> str:
-    return (f"{opening['kind'].capitalize()} {opening['id']} on {opening['host']} ({WALL_LABELS[opening['host']]}), "
+    reference = "authored partition start" if opening["host"].startswith("P") else "inner wall reference"
+    return (f"{opening['kind'].capitalize()} {opening['id']} on {opening['host']} ({_host_label(settings, opening['host'])}), "
             f"{_text(opening['width_mm'])} x {_text(opening['height_mm'])} mm; sill {_text(opening['sill_mm'])} mm; "
-            f"{_opening_position(settings, opening)} from the inner wall reference")
+            f"{_opening_position(settings, opening)} from the {reference}")
 
 
 def _opening_changes(before: dict, after: dict) -> list[dict]:
@@ -357,18 +547,23 @@ def _opening_changes(before: dict, after: dict) -> list[dict]:
                 continue
             old_text, new_text = _text(old[field]), _text(new[field])
             if field == "host":
-                old_text, new_text = f"{old[field]} ({WALL_LABELS[old[field]]})", f"{new[field]} ({WALL_LABELS[new[field]]})"
+                old_text, new_text = f"{old[field]} ({_host_label(before, old[field])})", f"{new[field]} ({_host_label(after, new[field])})"
             suffix = " mm" if field.endswith("_mm") else ""
             changes.append({"field": f"openings.{identity}.{field}", "label": f"{label} {field_label}",
                             "before": old[field], "after": new[field],
                             "description": f"{label} {field_label}: {old_text}{suffix} to {new_text}{suffix}.",
                             "category": "openings", "element_id": identity, "status": "modified"})
         old_start, new_start = _opening_start(before, old), _opening_start(after, new)
-        if old["offset_mm"] != new["offset_mm"] or old_start != new_start:
+        old_point, new_point = _partition_opening_point(before, old), _partition_opening_point(after, new)
+        moved_with_partition = old_point is not None and new_point is not None and old_point != new_point
+        if old["offset_mm"] != new["offset_mm"] or old_start != new_start or moved_with_partition:
+            movement = (f" Authored partition position: {_point_text(old_point)} to {_point_text(new_point)}."
+                        if moved_with_partition else "")
+            reference = "authored" if old["host"].startswith("P") or new["host"].startswith("P") else "inner"
             changes.append({"field": f"openings.{identity}.offset_mm", "label": f"{label} position",
                             "before": old["offset_mm"], "after": new["offset_mm"],
                             "before_start_mm": old_start, "after_start_mm": new_start,
-                            "description": f"{label} position: {_opening_position(before, old)} to {_opening_position(after, new)}; offsets follow each host's inner reference direction.",
+                            "description": f"{label} position: {_opening_position(before, old)} to {_opening_position(after, new)}; offsets follow each host's {reference} reference direction." + movement,
                             "category": "openings", "element_id": identity, "status": "modified"})
     return changes
 
@@ -391,6 +586,11 @@ def _snapshot(result: dict, name: str) -> tuple[dict[str, dict], str, Decimal]:
         code = item["code"]
         if code in rows:
             raise ValueError(f"{name} has duplicate BOQ code {code}")
+        if "rate_code" in item and (not isinstance(item["rate_code"], str) or not item["rate_code"].strip()):
+            raise ValueError(f"{name} item {code} has an invalid base rate code")
+        for field in ("group_id", "group_name"):
+            if item.get(field) is not None and not isinstance(item[field], str):
+                raise ValueError(f"{name} item {code} has an invalid {field}")
         if not isinstance(item.get("unit"), str) or not item["unit"].strip():
             raise ValueError(f"{name} item {code} is missing its unit")
         quantity = _decimal(item.get("quantity"), f"{name} {code} quantity")
@@ -444,6 +644,10 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         setting_changes.append({"field": field, "label": label, "before": old, "after": new,
                                 "description": f"{label}: {_text(old)}{suffix} to {_text(new)}{suffix}.", "category": category})
     setting_changes.extend(_opening_changes(before["settings"], after["settings"]))
+    setting_changes.extend(_partition_changes(before["settings"], after["settings"]))
+    setting_changes.extend(_room_changes(before, after))
+    renamed_rooms = {item["element_id"] for item in setting_changes
+                     if item["category"] == "rooms" and item["field"].endswith(".name")}
 
     items = []
     for code in dict.fromkeys([*old_rows, *new_rows]):
@@ -485,6 +689,11 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
                 parts.append(f"description changed from '{old_description}' to '{new_description}'")
             if old["element_ids"] != new["element_ids"]:
                 parts.append("linked model elements changed")
+            for field, label in (("group_id", "room/group ID"), ("group_name", "room/group name"), ("rate_code", "base rate code")):
+                if field == "group_name" and old.get("group_id") == new.get("group_id") and new.get("group_id") not in renamed_rooms:
+                    continue
+                if old.get(field) is not None and new.get(field) is not None and old[field] != new[field]:
+                    parts.append(f"{label} {_text(old[field])} to {_text(new[field])}")
             old_facts, new_facts = _rate_facts(before, old), _rate_facts(after, new)
             for field, label in (("origin", "rate origin"), ("source", "rate source"), ("effective_date", "rate effective date"),
                                  ("library_rate", "selected library base rate")):
@@ -502,6 +711,10 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
             rounding_effect = delta - quantity_effect - rate_effect
         items.append({
             "code": code, "description": description,
+            "rate_code": (new or old).get("rate_code", code),
+            "group_id": (new or old).get("group_id"), "group_name": (new or old).get("group_name"),
+            "before_group_id": (old or {}).get("group_id"), "after_group_id": (new or {}).get("group_id"),
+            "before_group_name": (old or {}).get("group_name"), "after_group_name": (new or {}).get("group_name"),
             "before_description": old_description, "after_description": new_description,
             "unit": new_unit or old_unit if comparable else f"{old_unit} to {new_unit}",
             "before_unit": old_unit, "after_unit": new_unit,

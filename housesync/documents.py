@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import csv
 import html
-from math import ceil
+from decimal import Decimal
+from math import ceil, dist, hypot
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +26,10 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A3, A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from shapely.geometry import LineString, Point, Polygon, box
 
 INK = "#173042"
 PALE = "#EAF3F7"
@@ -73,7 +76,7 @@ def _rate_notes(result: dict[str, Any]) -> list[str]:
 def _rate_provenance(result: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     """Use saved provenance only; never infer an old snapshot's library."""
     library = result.get("rate_library") or {}
-    selected = library.get("rows", {}).get(item["code"], {})
+    selected = library.get("rows", {}).get(item.get("rate_code", item["code"]), {})
     return {
         "origin": item.get("rate_origin", "Not recorded"),
         "library_rate": item.get("library_rate", selected.get("rate")),
@@ -102,6 +105,108 @@ def _rate_provenance_rows(result: dict[str, Any]) -> list[tuple[str, str]]:
 def _row_quantities(item: dict[str, Any]) -> tuple[float, float, float]:
     """Read saved row facts, including the original single-quantity snapshots."""
     return item.get("net_quantity", item["quantity"]), item.get("wastage_percent", 0), item.get("gross_quantity", item["quantity"])
+
+
+def _rooms(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return result.get("rooms", result.get("drawing", {}).get("rooms", []))
+
+
+def _partitions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return result.get("partitions", result.get("drawing", {}).get("partitions", []))
+
+
+def _multi_room(result: dict[str, Any]) -> bool:
+    return bool(_partitions(result)) or len(_rooms(result)) > 1
+
+
+def _wrap_drawing_text(value: str, width: float, size: float, font: str = "Helvetica") -> list[str]:
+    """Wrap by measured glyph width, including a single unbroken long name."""
+    if width <= 0:
+        return []
+    lines, current = [], ""
+    for word in value.split():
+        if current and stringWidth(f"{current} {word}", font, size) <= width:
+            current += " " + word
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+        while word and stringWidth(word, font, size) > width:
+            count = 1
+            while count < len(word) and stringWidth(word[:count + 1], font, size) <= width:
+                count += 1
+            lines.append(word[:count])
+            word = word[count:]
+        current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _room_plan_label(room: dict, index: int, scale: float, px: float, py: float, thickness: float, width: float) -> dict:
+    """Fit the complete annotation within the actual room, or use a schedule reference."""
+    shape = Polygon(room["outline_mm"], holes=room.get("holes_mm") or [])
+    point = room.get("label_point_mm") or list(shape.representative_point().coords[0])
+    cx, cy = px + (thickness + point[0])*scale, py + (thickness + width - point[1])*scale
+    cut = shape.intersection(LineString([(shape.bounds[0] - 1, point[1]), (shape.bounds[2] + 1, point[1])]))
+    segments = list(cut.geoms) if hasattr(cut, "geoms") else [cut]
+    run = next((segment for segment in segments if segment.distance(Point(point)) < 1e-6 and not segment.is_empty), None)
+    span = min(190, 2 * min(point[0] - run.bounds[0], run.bounds[2] - point[0])*scale - 8) if run is not None else 0
+    name = room.get("name", room["id"])
+    area = f"{room['area_m2']:,.2f} m2 clear"
+
+    def fits(lines: list[dict], padding: float = 2) -> bool:
+        for line in lines:
+            size = line["size"]
+            text_width = stringWidth(line["text"], "Helvetica-Bold" if line["bold"] else "Helvetica", size)
+            left, right = (cx - text_width/2 - padding - px)/scale - thickness, (cx + text_width/2 + padding - px)/scale - thickness
+            bottom = thickness + width - (line["y"] + .25*size + padding - py)/scale
+            top = thickness + width - (line["y"] - size - padding - py)/scale
+            if not shape.buffer(1e-5).covers(box(left, bottom, right, top)):
+                return False
+        return True
+
+    for size in (10, 9, 8):
+        names = _wrap_drawing_text(name, span, size, "Helvetica-Bold")
+        if not names or len(names) > 3:
+            continue
+        first = cy - ((len(names) - 1)*size*1.2 + 14)/2
+        lines = [{"text": value, "size": size, "bold": True, "y": first + line_index*size*1.2}
+                 for line_index, value in enumerate(names)]
+        lines.append({"text": area, "size": 9, "bold": False, "y": lines[-1]["y"] + 14})
+        if fits(lines):
+            return {"room_id": room["id"], "room_ref": f"R{index}", "cx": cx, "cy": cy, "lines": lines, "abbreviated": False}
+    reference = f"R{index}"
+    for size in (9, 8, 7, 6):
+        lines = [{"text": reference, "size": size, "bold": True, "y": cy - 6},
+                 {"text": area, "size": 7, "bold": False, "y": cy + 7}]
+        if fits(lines, padding=1):
+            return {"room_id": room["id"], "room_ref": reference, "cx": cx, "cy": cy, "lines": lines, "abbreviated": True}
+        lines = [{"text": reference, "size": size, "bold": True, "y": cy + size*.3}]
+        if fits(lines, padding=1):
+            return {"room_id": room["id"], "room_ref": reference, "cx": cx, "cy": cy, "lines": lines, "abbreviated": True}
+    # A room smaller than a printable label remains identified by the schedule;
+    # drawing text over neighbouring geometry would misrepresent the annotation.
+    return {"room_id": room["id"], "room_ref": reference, "cx": cx, "cy": cy, "lines": [], "abbreviated": True}
+
+
+def _boq_groups(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read modelled group ownership; reconcile saved line amounts only."""
+    if not _multi_room(result):
+        return []
+    groups = {group["id"]: {**group, "rows": []} for group in result.get("boq_groups", [])}
+    for item in result["boq"]:
+        identity = item.get("group_id", "SHELL")
+        groups.setdefault(identity, {"id": identity, "name": item.get("group_name", identity), "rows": []})["rows"].append(item)
+    output = []
+    for group in groups.values():
+        subtotal = sum((Decimal(str(item["amount"])) for item in group["rows"]), Decimal(0))
+        if "subtotal" in group and Decimal(str(group["subtotal"])) != subtotal:
+            raise ValueError(f"Saved BOQ group {group['id']} does not reconcile to its line amounts")
+        output.append({**group, "subtotal": float(subtotal)})
+    if sum((Decimal(str(group["subtotal"])) for group in output), Decimal(0)) != Decimal(str(result["totals"]["subtotal"])):
+        raise ValueError("Saved BOQ groups do not reconcile to the saved estimate")
+    return output
 
 
 def _boq(result: dict[str, Any], output: Path) -> None:
@@ -134,7 +239,32 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         cell.alignment = Alignment(vertical="center", wrap_text=True)
     ws.row_dimensions[header_row].height = 29
     thin = Side(style="thin", color=BORDER[1:])
-    for idx, item in enumerate(result["boq"], header_row + 1):
+    groups = _boq_groups(result)
+    events = ([(kind, row) for group in groups for kind, row in
+               [("heading", group), *(("item", item) for item in group["rows"]), ("subtotal", group)]]
+              if groups else [("item", item) for item in result["boq"]])
+    group_start, group_subtotals = 0, []
+    for idx, (kind, item) in enumerate(events, header_row + 1):
+        if kind == "heading":
+            ws.merge_cells(start_row=idx, start_column=1, end_row=idx, end_column=9)
+            ws.cell(idx, 1, _safe_cell(f"{item['id']} - {item['name']}"))
+            for cell in ws[idx]:
+                cell.fill = PatternFill("solid", fgColor="DCEBF2")
+                cell.font = Font(name="Calibri", size=12, bold=True, color=INK[1:])
+                cell.alignment = Alignment(wrap_text=True, vertical="center")
+            ws.row_dimensions[idx].height = 28
+            group_start = idx + 1
+            continue
+        if kind == "subtotal":
+            ws.cell(idx, 2, _safe_cell(f"{item['name']} subtotal"))
+            ws.cell(idx, 8, f"=SUM(H{group_start}:H{idx - 1})" if group_start < idx else 0)
+            group_subtotals.append(idx)
+            for cell in ws[idx]:
+                cell.fill = PatternFill("solid", fgColor="E5F0ED")
+                cell.font = Font(name="Calibri", size=11, bold=True, color=INK[1:])
+            ws.cell(idx, 8).number_format = "#,##0.00"
+            ws.row_dimensions[idx].height = 28
+            continue
         net, wastage, _gross = _row_quantities(item)
         values = [item["code"], item["description"], item["unit"], net, wastage,
                   f"=ROUND(D{idx}*(1+E{idx}/100),6)", item["rate"],
@@ -155,10 +285,11 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         description_lines = ceil(len(str(item["description"])) / 48)
         reference_lines = ceil(len(", ".join(item.get("element_ids", []))) / 22)
         ws.row_dimensions[idx].height = max(42, min(300, 14 * max(description_lines, reference_lines) + 10))
-    last = header_row + len(result["boq"])
+    last = header_row + len(events)
     total_row = last + 2
     ws.cell(total_row, 2, "Estimated subtotal")
-    ws.cell(total_row, 8, f"=SUM(H{header_row + 1}:H{last})")
+    ws.cell(total_row, 8, "=SUM(" + ",".join(f"H{row}" for row in group_subtotals) + ")"
+            if groups else f"=SUM(H{header_row + 1}:H{last})")
     for cell in ws[total_row]:
         cell.font = Font(name="Calibri", bold=True, size=12)
         cell.fill = PatternFill("solid", fgColor="DCEBF2")
@@ -176,11 +307,13 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         ws.row_dimensions[row].height = max(26, 14 * ceil(len(note) / 150) + 12)
     for col, width in {"A": 21, "B": 56, "C": 8, "D": 15, "E": 12, "F": 15, "G": 14, "H": 19, "I": 25}.items():
         ws.column_dimensions[col].width = width
+    if groups:
+        ws.column_dimensions["A"].width = 48
     ws.freeze_panes = "D7"
-    ws.auto_filter.ref = f"A6:I{last}"
+    ws.auto_filter.ref = None if groups else f"A6:I{last}"
     ws.print_options.horizontalCentered = True
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.paperSize = ws.PAPERSIZE_A3 if groups else ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -210,6 +343,8 @@ def _boq(result: dict[str, Any], output: Path) -> None:
     provenance.merge_cells("B2:K2")
     for col, width in {"A": 23, "B": 16, "C": 16, "D": 15, "E": 20, "F": 45, "G": 19, "H": 17, "I": 45, "J": 19, "K": 55}.items():
         provenance.column_dimensions[col].width = width
+    if groups:
+        provenance.column_dimensions["A"].width = 48
     for row in range(4, len(result["boq"]) + 4):
         provenance.cell(row, 2).number_format = provenance.cell(row, 5).number_format = "#,##0.00"
         info = _rate_provenance(result, result["boq"][row - 4])
@@ -230,7 +365,13 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         writer.writerow(["Project", _safe_cell(settings["project_name"]), "Revision", result["revision"], "Currency", currency])
         writer.writerow([*headers, "Rate origin", "Selected library rate", "Rate source", "Rate effective date", "Library SHA-256", "Rate notes",
                          "Library currency", "Library source", "Library effective date"])
-        for item in result["boq"]:
+        for kind, item in events:
+            if kind == "heading":
+                writer.writerow(["Group", _safe_cell(item["id"]), _safe_cell(item["name"])])
+                continue
+            if kind == "subtotal":
+                writer.writerow(["", _safe_cell(f"{item['name']} subtotal"), "", "", "", "", "", item["subtotal"]])
+                continue
             net, wastage, gross = _row_quantities(item)
             info = _rate_provenance(result, item)
             writer.writerow([_safe_cell(item["code"]), _safe_cell(item["description"]), item["unit"], net, wastage, gross,
@@ -250,8 +391,28 @@ def _opening_kind(opening: dict[str, Any]) -> str:
 
 
 def _opening_requirement(opening: dict[str, Any]) -> str:
+    reference = "partition host reference" if opening["host"].startswith("P") else "internal wall reference"
     return (f"{opening['id']} on {opening['host']}: {opening['width_mm']:,.0f} x {opening['height_mm']:,.0f} mm opening; "
-            f"sill {opening['sill_mm']:,.0f} mm; start offset {opening['start_mm']:,.0f} mm along the internal wall reference.")
+            f"sill {opening['sill_mm']:,.0f} mm; start offset {opening['start_mm']:,.0f} mm along the {reference}.")
+
+
+def _finish_text(value: Any) -> str:
+    if value is None:
+        return "Not selected"
+    if isinstance(value, dict):
+        return "; ".join(f"{key.replace('_', ' ')}: {_finish_text(item)}" for key, item in value.items())
+    return str(value)
+
+
+def _room_finish_schedule(result: dict[str, Any]) -> list[tuple[str, str]]:
+    rows = []
+    for room in _rooms(result):
+        finishes = room.get("finishes", {})
+        fields = [f"Clear area {room['area_m2']:,.3f} m2"]
+        fields.extend(f"{label}: {_finish_text(finishes.get(key))}" for key, label in
+                      (("floor", "Floor finish"), ("ceiling", "Ceiling finish"), ("skirting", "Skirting"), ("paint", "Wall paint")))
+        rows.append((f"{room['id']} - {room.get('name', room['id'])}", ". ".join(fields) + "."))
+    return rows
 
 
 def _finish_requirements(result: dict[str, Any]) -> list[tuple[str, str]]:
@@ -266,13 +427,16 @@ def _finish_requirements(result: dict[str, Any]) -> list[tuple[str, str]]:
     requirements = []
     for item in result["boq"]:
         net, wastage, gross = _row_quantities(item)
-        if item["code"] in trade_scope:
-            label, scope = trade_scope[item["code"]]
+        code = item.get("rate_code", item["code"])
+        group = f"{item.get('group_name', item['group_id'])} - " if item.get("group_id") and _multi_room(result) else ""
+        if code in trade_scope:
+            label, scope = trade_scope[code]
+            label = group + label
             requirements.append((label, f"{scope} Net {net:,.6f} {item['unit']}; wastage {wastage:g}%; gross priced quantity {gross:,.6f} {item['unit']}."))
-        elif item["code"] == "PAINT":
+        elif code == "PAINT":
             measured = item.get("measured_quantity", net)
             coats = item.get("paint_coats", _data(result).get("paint_coats", 1))
-            requirements.append(("Paint measurement", f"Measured net wall area {measured:,.6f} m2; {coats:g} coat(s); net coated quantity {net:,.6f} m2. "
+            requirements.append((group + "Paint measurement", f"Measured net wall area {measured:,.6f} m2; {coats:g} coat(s); net coated quantity {net:,.6f} m2. "
                                  f"Wastage {wastage:g}%; gross priced quantity {gross:,.6f} m2. Reveals and floor/roof painting excluded."))
     return requirements
 
@@ -292,11 +456,18 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
     door = [o for o in openings if _opening_kind(o) == "door"]
     windows = [o for o in openings if _opening_kind(o) == "window"]
     materials = [
-        ("Floor slab", f"{drawing.get('slab_thickness_mm', 150):,.0f} mm concrete slab within the internal room footprint. Finish product to be confirmed."),
-        ("Walls", f"{t:,.0f} mm uniform masonry assembly. Construction and performance requirements to be confirmed."),
+        ("Floor slab", f"{drawing.get('slab_thickness_mm', 150):,.0f} mm concrete slab within the clear shell footprint. Finish product to be confirmed."),
+        ("Shell walls", f"{t:,.0f} mm uniform masonry assembly. Construction and performance requirements to be confirmed."),
         ("Flat roof", f"{drawing.get('roof_thickness_mm', 200):,.0f} mm modelled roof, overhang {drawing.get('roof_overhang_mm', 300):,.0f} mm. Waterproofing specification to be confirmed."),
-        ("Paint finish", f"{settings['paint_colour']} ({settings['paint_hex']}). Manufacturer product and physical colour reference to be confirmed."),
+        ("Shell paint finish" if _multi_room(result) else "Paint finish",
+         f"{settings['paint_colour']} ({settings['paint_hex']}). Manufacturer product and physical colour reference to be confirmed."),
     ]
+    for partition in _partitions(result):
+        run = dist(partition["start_mm"], partition["end_mm"])
+        materials.append((f"Partition {partition['id']}",
+                          f"{partition.get('wall_type', 'Unspecified')} wall; {partition['thickness_mm']:g} mm thick; "
+                          f"{partition['height_mm']:g} mm high; {run:,.0f} mm host length. "
+                          f"Start {partition['start_mm']}, end {partition['end_mm']} mm. Opening dimensions use this host reference."))
     materials.extend(_finish_requirements(result))
     materials.extend((f"Door {opening['id']}", _opening_requirement(opening)) for opening in door)
     materials.extend((f"Window {opening['id']}", _opening_requirement(opening)) for opening in windows)
@@ -376,6 +547,10 @@ def _specification(result: dict[str, Any], output: Path) -> None:
     _docx_table(doc, dimensions)
     doc.add_heading("Materials and finishes", level=1)
     _docx_table(doc, materials)
+    room_schedule = _room_finish_schedule(result)
+    if room_schedule:
+        doc.add_heading("Room finish schedule", level=1)
+        _docx_table(doc, room_schedule)
     doc.add_heading("Rate provenance", level=1)
     _docx_table(doc, _rate_provenance_rows(result))
     doc.add_heading("Measurement and scope", level=1)
@@ -396,7 +571,11 @@ def _specification(result: dict[str, Any], output: Path) -> None:
                              leading=15, spaceBefore=10, spaceAfter=6, textColor=colors.black)
     story: list[Any] = [Paragraph("House technical specification", title), Paragraph(html.escape(settings["project_name"]), body),
                         Paragraph(f"Draft attachment to contract | Design revision {result['revision']}", body), Paragraph(html.escape(notes[0]), body)]
-    for label, rows in (("Dimensions", dimensions), ("Materials and finishes", materials), ("Rate provenance", _rate_provenance_rows(result))):
+    sections = [("Dimensions", dimensions), ("Materials and finishes", materials)]
+    if room_schedule:
+        sections.append(("Room finish schedule", room_schedule))
+    sections.append(("Rate provenance", _rate_provenance_rows(result)))
+    for label, rows in sections:
         story.append(Paragraph(label, heading))
         table_data = [[Paragraph(html.escape(a), body), Paragraph(html.escape(b), body)] for a, b in [("Item", "Requirement")] + rows]
         table = Table(table_data, colWidths=[43 * mm, 130 * mm], repeatRows=1, hAlign="LEFT")
@@ -441,6 +620,9 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
     def line(x1: float, y1: float, x2: float, y2: float, stroke: str = INK, line_width: float = 1) -> None:
         primitives.append(dict(kind="line", x1=x1, y1=y1, x2=x2, y2=y2, stroke=stroke, line_width=line_width))
 
+    def polygon(points: list[tuple[float, float]], fill: str, stroke: str = INK, line_width: float = 1) -> None:
+        primitives.append(dict(kind="polygon", points=points, fill=fill, stroke=stroke, line_width=line_width))
+
     def text(x: float, y: float, value: str, size: float = 10, fill: str = INK, anchor: str = "start", bold: bool = False,
              rotation: float = 0) -> None:
         primitives.append(dict(kind="text", x=x, y=y, text=str(value), size=size, fill=fill, anchor=anchor, bold=bold, rotation=rotation))
@@ -470,12 +652,37 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
 
     # Floor plan. The model origin is the internal southwest corner.
     text(68, 145, "01  Floor plan", 14, bold=True)
-    text(68, 164, "Internal clear sizes and external wall footprint", 9, GREY)
+    text(68, 164, "Clear room areas and partition centreline dimensions" if _multi_room(result)
+         else "Internal clear sizes and external wall footprint", 9, GREY)
     scale = min(470 / (length + 2*t), 380 / (width + 2*t))
     px, py = 120.0, 230.0
     ew, eh = (length + 2*t)*scale, (width + 2*t)*scale
     rect(px, py, ew, eh, settings["paint_hex"], INK, 1.1)
     rect(px + t*scale, py + t*scale, length*scale, width*scale, "#FFFFFF", INK, .7)
+    partitions = {partition["id"]: partition for partition in _partitions(result)}
+
+    def model_point(point: list[float] | tuple[float, float]) -> tuple[float, float]:
+        return px + (t + point[0])*scale, py + (t + width - point[1])*scale
+
+    for room in _rooms(result):
+        if room.get("outline_mm"):
+            polygon([model_point(point) for point in room["outline_mm"]], "#F8FAFC", "#E2E9EE", .3)
+    for partition in partitions.values():
+        start, end = partition["start_mm"], partition["end_mm"]
+        run = hypot(end[0] - start[0], end[1] - start[1])
+        dx, dy = (end[0] - start[0]) / run, (end[1] - start[1]) / run
+        half = partition["thickness_mm"] / 2
+        footprint = partition.get("footprint_mm") or [(start[0] - dy*half, start[1] + dx*half),
+                                                        (end[0] - dy*half, end[1] + dx*half),
+                                                        (end[0] + dy*half, end[1] - dx*half),
+                                                        (start[0] + dy*half, start[1] - dx*half)]
+        polygon([model_point(point) for point in footprint], "#CBD5DC", INK, .8)
+        a, b = model_point(start), model_point(end)
+        label = f"{partition['id']}  {run:,.0f} mm"
+        if abs(start[1] - end[1]) < .001:
+            dim_h(min(a[0], b[0]), max(a[0], b[0]), a[1] - half*scale - 18, a[1], label)
+        else:
+            dim_v(min(a[1], b[1]), max(a[1], b[1]), a[0] + half*scale + 18, a[0], label)
     for opening in d["openings"]:
         host, start, ow = opening["host"], opening["start_mm"], opening["width_mm"]
         fill = "#FFFFFF" if _opening_kind(opening) == "door" else "#DCEFF7"
@@ -488,13 +695,41 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
         elif host == "W3":
             x, y, w, h = px + (t+length-start-ow)*scale, py, ow*scale, t*scale
             label_x, label_y = x + w/2, y + h + 17
-        else:
+        elif host == "W4":
             x, y, w, h = px, py + (t+start)*scale, t*scale, ow*scale
             label_x, label_y = x + w + 16, y + h/2
+        elif host in partitions:
+            partition = partitions[host]
+            a, b = partition["start_mm"], partition["end_mm"]
+            run = dist(a, b)
+            dx, dy = (b[0] - a[0])/run, (b[1] - a[1])/run
+            half = partition["thickness_mm"]/2
+            p1 = a[0] + dx*start, a[1] + dy*start
+            p2 = a[0] + dx*(start + ow), a[1] + dy*(start + ow)
+            opening_points = [(p1[0] - dy*half, p1[1] + dx*half), (p2[0] - dy*half, p2[1] + dx*half),
+                              (p2[0] + dy*half, p2[1] - dx*half), (p1[0] + dy*half, p1[1] - dx*half)]
+            polygon([model_point(point) for point in opening_points], fill, INK, .65)
+            if _opening_kind(opening) == "window":
+                w1, w2 = model_point(p1), model_point(p2)
+                line(*w1, *w2, INK, .6)
+            middle = model_point(((p1[0] + p2[0])/2, (p1[1] + p2[1])/2))
+            text(middle[0] - (14 if abs(dx) < .001 else 0), middle[1] + (14 if abs(dy) < .001 else 0),
+                 opening["id"], 9, anchor="middle")
+            continue
+        else:
+            raise ValueError(f"Drawing opening {opening['id']} has unknown host {host}")
         rect(x, y, w, h, fill, INK, .65)
         text(label_x, label_y, opening["id"], 9, anchor="middle")
-    text(px + ew/2, py + eh/2 - 4, "HOUSE", 13, anchor="middle", bold=True)
-    text(px + ew/2, py + eh/2 + 16, f"{result['quantities']['floor_area_m2']:,.2f} m2 floor area", 10, GREY, "middle")
+    if _rooms(result):
+        for room_index, room in enumerate(_rooms(result), 1):
+            label = _room_plan_label(room, room_index, scale, px, py, t, width)
+            for item in label["lines"] or [{"text": "", "y": label["cy"], "size": 6, "bold": False}]:
+                text(label["cx"], item["y"], item["text"], item["size"], INK if item["bold"] else GREY,
+                     anchor="middle", bold=item["bold"])
+                primitives[-1].update(room_id=room["id"], room_ref=label["room_ref"], room_label_abbreviated=label["abbreviated"])
+    else:
+        text(px + ew/2, py + eh/2 - 4, "HOUSE", 13, anchor="middle", bold=True)
+        text(px + ew/2, py + eh/2 + 16, f"{result['quantities']['floor_area_m2']:,.2f} m2 floor area", 10, GREY, "middle")
     dim_h(px, px + ew, py - 37, py, f"{length+2*t:,.0f} overall")
     dim_h(px+t*scale, px+(t+length)*scale, py+eh+33, py+eh, f"{length:,.0f} clear")
     dim_v(py, py+eh, px-38, px, f"{width+2*t:,.0f}")
@@ -538,7 +773,7 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
 
     text(68, 697, f"Wall thickness {t:,.0f} mm | Roof thickness {roof_t:,.0f} mm | Roof overhang {overhang:,.0f} mm | Slab thickness {slab_t:,.0f} mm", 10)
     rect(68, 714, 24, 15, settings["paint_hex"], BORDER, .6)
-    text(102, 726, f"Paint finish  {settings['paint_colour']}  {settings['paint_hex']}", 10)
+    text(102, 726, f"{'Shell paint finish' if _multi_room(result) else 'Paint finish'}  {settings['paint_colour']}  {settings['paint_hex']}", 10)
     text(68, 754, "Diagrammatic model drawings. Dimensions govern. Confirm construction details before issue.", 9, GREY)
     line(48, page_h-64, page_w-48, page_h-64, BORDER, .8)
     text(48, page_h-44, f"House Sync | Design revision {result['revision']}", 9, GREY)
@@ -611,7 +846,8 @@ def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict
         headings = ["ID", "Type", "Wall", "Opening W x H", "Sill", "Start offset", "End clearance"]
         rows = []
         for opening in chunk:
-            run = length if opening["host"] in {"W1", "W3"} else width
+            partition = next((wall for wall in _partitions(result) if wall["id"] == opening["host"]), None)
+            run = dist(partition["start_mm"], partition["end_mm"]) if partition else length if opening["host"] in {"W1", "W3"} else width
             end = run - opening["start_mm"] - opening["width_mm"]
             rows.append([opening["id"], _opening_kind(opening).capitalize(), opening["host"],
                          f"{opening['width_mm']:,.0f} x {opening['height_mm']:,.0f}", f"{opening['sill_mm']:,.0f}",
@@ -624,11 +860,55 @@ def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict
                 rect(x, y, cell_width, row_height, INK if row_index == 0 else PALE if row_index % 2 else "#FFFFFF", BORDER, .4)
                 text(x + 7, y + 15, value, 9, "#FFFFFF" if row_index == 0 else INK, bold=row_index == 0)
                 x += cell_width
-        text(68, 750, "Reference directions: W1 south eastwards; W2 east northwards; W3 north westwards; W4 west southwards.", 9, GREY)
+        text(68, 750, "Reference directions: W1 east; W2 north; W3 west; W4 south. Partition offsets follow each saved start-to-end direction."
+             if _partitions(result) else "Reference directions: W1 south eastwards; W2 east northwards; W3 north westwards; W4 west southwards.", 9, GREY)
         line(48, page_h - 64, page_w - 48, page_h - 64, BORDER, .8)
         text(48, page_h - 44, f"House Sync | Design revision {result['revision']}", 9, GREY)
         text(page_w - 48, page_h - 44, f"Sheet A{sheet_index:03} | Draft", 9, GREY, "end")
         sheets.append((page_w, page_h, primitives))
+    if any(item.get("room_label_abbreviated") for item in sheets[0][2]):
+        rooms = _rooms(result)
+        for offset in range(0, len(rooms), 14):
+            sheet_index = len(sheets) + 1
+            primitives = []
+
+            def label(x, y, value, size=10, *, bold=False, fill=INK, _target=primitives):
+                _target.append(dict(kind="text", x=x, y=y, text=str(value), size=size, fill=fill,
+                                    anchor="start", bold=bold, rotation=0))
+
+            def frame(x, y, w, h, fill, *, _target=primitives):
+                _target.append(dict(kind="rect", x=x, y=y, w=w, h=h, fill=fill, stroke=BORDER, line_width=.4))
+
+            frame(28, 28, page_w - 56, page_h - 56, "#FFFFFF")
+            label(48, 64, "Room name and clear area schedule", 24, bold=True)
+            label(48, 88, settings["project_name"], 12)
+            label(48, 112, f"Design revision {result['revision']} | Full names and stable room IDs", 10, fill=GREY)
+            label(68, 144, "Short references keep long names and areas from crossing room boundaries on the plan.", 10, fill=GREY)
+            widths = [70, 185, page_w - 136 - 70 - 185 - 130, 130]
+            x0, y = 68.0, 164.0
+            x = x0
+            for heading, cell_width in zip(("Plan ref", "Stable room ID", "Room name (full)", "Clear area"), widths, strict=True):
+                frame(x, y, cell_width, 28, INK)
+                label(x + 7, y + 18, heading, 10, bold=True, fill="#FFFFFF")
+                x += cell_width
+            y += 28
+            for index, room in enumerate(rooms[offset:offset + 14], offset + 1):
+                names = _wrap_drawing_text(room.get("name", room["id"]), widths[2] - 14, 10)
+                row_height = max(34, len(names)*12 + 12)
+                x = x0
+                for cell_width in widths:
+                    frame(x, y, cell_width, row_height, PALE if index % 2 else "#FFFFFF")
+                    x += cell_width
+                label(x0 + 7, y + 19, f"R{index}")
+                label(x0 + widths[0] + 7, y + 19, room["id"])
+                for line_index, name in enumerate(names):
+                    label(x0 + widths[0] + widths[1] + 7, y + 18 + line_index*12, name)
+                    primitives[-1]["full_room_name"] = room.get("name", room["id"])
+                label(x0 + sum(widths[:3]) + 7, y + 19, f"{room['area_m2']:,.3f} m2")
+                y += row_height
+            label(48, page_h - 44, f"House Sync | Design revision {result['revision']}", 9, fill=GREY)
+            label(page_w - 220, page_h - 44, f"Sheet A{sheet_index:03} | Draft", 9, fill=GREY)
+            sheets.append((page_w, page_h, primitives))
     return sheets
 
 
@@ -655,6 +935,19 @@ def _drawings(result: dict[str, Any], output: Path) -> None:
                 if fill:
                     pdf.setFillColor(colors.HexColor(p["fill"]))
                 pdf.rect(p["x"], height-p["y"]-p["h"], p["w"], p["h"], fill=int(fill), stroke=1)
+            elif p["kind"] == "polygon":
+                points = " ".join(f"{x:.3f},{y:.3f}" for x, y in p["points"])
+                svg.append(f'<polygon points="{points}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+                pdf.setStrokeColor(colors.HexColor(p["stroke"]))
+                pdf.setLineWidth(p["line_width"])
+                fill = p["fill"] != "none"
+                if fill:
+                    pdf.setFillColor(colors.HexColor(p["fill"]))
+                path = pdf.beginPath()
+                for index, (x, y) in enumerate(p["points"]):
+                    (path.moveTo if index == 0 else path.lineTo)(x, height - y)
+                path.close()
+                pdf.drawPath(path, fill=int(fill), stroke=1)
             elif p["kind"] == "line":
                 svg.append(f'<line x1="{p["x1"]:.3f}" y1="{p["y1"]:.3f}" x2="{p["x2"]:.3f}" y2="{p["y2"]:.3f}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
                 pdf.setStrokeColor(colors.HexColor(p["stroke"]))
@@ -663,7 +956,8 @@ def _drawings(result: dict[str, Any], output: Path) -> None:
             else:
                 weight = "bold" if p["bold"] else "normal"
                 transform = f' transform="rotate({p["rotation"]} {p["x"]:.3f} {p["y"]:.3f})"' if p["rotation"] else ""
-                svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}>{html.escape(p["text"])}</text>')
+                accessible = f' aria-label="{html.escape(p["full_room_name"], quote=True)}"' if p.get("full_room_name") else ""
+                svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}{accessible}>{html.escape(p["text"])}</text>')
                 pdf.setFillColor(colors.HexColor(p["fill"]))
                 pdf.setFont("Helvetica-Bold" if p["bold"] else "Helvetica", p["size"])
                 draw = {"start": pdf.drawString, "middle": pdf.drawCentredString, "end": pdf.drawRightString}[p["anchor"]]

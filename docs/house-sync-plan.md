@@ -6,18 +6,18 @@ The project starts from [homespec](https://github.com/maccman/homespec), an MIT-
 
 ## Current first version
 
-The demonstration is a single rectangular room shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
+The demonstration starts with a single room in a rectangular shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
 
 | Element | Current scope |
 | --- | --- |
-| Walls | Four uniform masonry walls, with one shared paint selection |
+| Walls | Four exterior masonry walls and optional orthogonal internal partitions, with room finish selections |
 | Floor | 150 mm slab within the clear internal room footprint |
 | Roof | 200 mm flat roof with 300 mm overhang beyond the external wall faces |
 | Doors | Editable hosted openings; default D1 is centred on the south wall, 1,000 x 2,100 mm |
 | Windows | Editable hosted openings; defaults N1/N2 are centred north/east, 1,500 x 1,200 mm with 900 mm sill |
 | Editable settings | House dimensions, finish, paint coats, per-item wastage, currency, rate overrides and source/date; stable-ID doors/windows with host, start, width, height and sill |
 | Plan and browser model | Direct constrained plan edits, snapping, undo/redo and draft review; compiled 3D view |
-| BOQ | Eleven items exported to Excel and CSV, with net quantities, wastage, gross priced quantities and row-level rate provenance |
+| BOQ | Shell and room lines using eleven trade codes, exported to Excel and CSV, with net quantities, wastage, gross priced quantities and row-level rate provenance |
 | Rate library | Editable `rates/rates_aud.csv`, one source/date per BOQ code, library snapshot SHA-256, optional project overrides |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
 | Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
@@ -40,7 +40,7 @@ The local server and browser interface integrate these components. The README co
 
 | Quantity | Rule |
 | --- | --- |
-| Floor slab, floor finish and ceiling area | Compiled clear internal room area; ceiling is a footprint allowance without a separate ceiling assembly |
+| Floor slab, floor finish and ceiling area | Slab covers the original clear shell. Floor finishes and ceiling allowances cover the clear derived room regions |
 | Wall volume | Final compiled wall volume after opening cuts; corner returns counted once |
 | Equivalent net wall area | Wall volume divided by wall thickness, retained for the uniform rectangular shell |
 | Skirting | Compiled internal room perimeter minus the widths of compiled door openings |
@@ -73,14 +73,14 @@ The DOCX package and contents passed structural tests. Visual DOCX rendering was
 | Milestone | Intended result |
 | --- | --- |
 | Implemented: editable openings | Add, remove, resize and move stable-ID doors/windows within validated hosts |
-| Multiple rooms | Internal partitions, room boundaries, room schedules, and reliable junction quantities |
+| Implemented: multiple rooms | Orthogonal partitions, derived rooms, finish schedules, junction-corrected quantities and ID-based comparisons |
 | Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
 | Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
 | Implemented: finishing trades and AUD allowances | Five finishing trades, editable coats/wastage, AUD defaults and rate source/date metadata |
 | Implemented: CSV rate library | Editable eleven-item CSV, per-row source/date, SHA-256 snapshots, per-item overrides/reset and rate attribution |
 | Project rates | Supplier quotation integration, product selection, location context and taxes remain |
 | Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
-| Further CAD editing | Arbitrary wall segments, reliable junctions, partitions and multiple rooms |
+| Further CAD editing | Non-orthogonal partitions and shell shapes |
 | Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |
 | Deployment | Evaluate an authenticated hosted service after the local workflow is reliable |
 

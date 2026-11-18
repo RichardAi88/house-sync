@@ -216,6 +216,14 @@ def group(shapes: Iterable[Solid]) -> Solid:
     return items[0] if len(items) == 1 else Compound(children=items)
 
 
+def union(shapes: Iterable[Solid]) -> Solid:
+    """Fuse exact solids, removing coincident faces at touching junctions."""
+    items = list(shapes)
+    if not items:
+        raise ValueError("union() needs at least one shape")
+    return items[0] if len(items) == 1 else items[0].fuse(*items[1:])
+
+
 def volume_below(shape: Solid, z: float) -> Solid:
     """The vertical volume below a solid's downward-facing skin, as far as ``z``.
 

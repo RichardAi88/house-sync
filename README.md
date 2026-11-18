@@ -6,11 +6,11 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 
 ## First version
 
-- A single-storey, single-room rectangular shell with a flat roof; one door and two windows by default.
+- A single-storey rectangular shell with a flat roof. The default design opens as one room with one door and two windows. Orthogonal partitions divide the shell into named rooms.
 - Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
 - A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
-- Eleven BOQ items in Excel/CSV, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage, gross priced quantity and each item's rate basis remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
+- Eleven BOQ rate codes in Excel/CSV, grouped into shell and room takeoffs, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage, gross priced quantity and each item's rate basis remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
@@ -26,7 +26,9 @@ The **Plan editor** is the main workspace. Plan measurements and opening positio
 4. Review the draft changes and resolve the geometry checks. Openings need 100 mm from wall ends, a 100 mm head clearance, and a 100 mm gap from another opening on the same wall. These are application constraints, not a building-code assessment.
 5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. The **Changes & cost** tab then provides the variation order PDF.
 
-Draft plan edits do not issue documents. Downloads of the current document set remain disabled until a successful update; a failed validation/build preserves the preceding saved revision. The editor currently supports the rectangular exterior shell and hosted doors/windows. Arbitrary wall segments, internal partitions and multiple rooms require a further model expansion.
+Draft plan edits do not issue documents. Downloads of the current document set remain disabled until a successful update; a failed validation/build preserves the preceding saved revision. Use the **Partition** tool to place two grid-snapped endpoints on the shell or other partitions. Select a partition to move it, drag either end grip, or edit its thickness, height and wall type. A new partition can temporarily leave a room inaccessible. Place a door on the new wall and review the application checks before updating.
+
+Select a derived room to enter its name and floor, ceiling, skirting or paint finish. Clear a finish to inherit the project allowance. The room follows moves of its bounding walls while its boundary identities stay the same. Splitting or merging rooms can create new identities. The plan, room finish schedule and BOQ identify the rooms saved in each revision. The variation order records partition and room edits by ID.
 
 ## Capture a change from A to B
 
@@ -132,12 +134,27 @@ For example, the default internal wall faces are `2 x (10 + 8) x 3 - 5.7 = 102.3
 
 The default library gives doors and windows the same AUD 650 allowance in separate rows; they can be priced independently. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Coat count, each item's wastage and rate overrides can be edited independently. The worked totals use the checked-in library with no overrides.
 
+## Worked partition takeoff
+
+Start with the default 10 × 8 m clear shell, 3 m walls and the original exterior openings. Dimensions below use the south-west inside corner as the origin. Run a 100 mm partition P1 from (4000, 0) to (4000, 8000) mm. Give it a 1000 × 2100 mm door starting 1500 mm from its first endpoint. For a third room, add a 100 mm partition P2 from (4000, 3000) to (10000, 3000) mm and a second 1000 × 2100 mm internal door near its centre.
+
+| Layout and room | Clear dimensions (m) | Floor and ceiling (m² each) | Clear perimeter (m) | Skirting (m) | Internal plaster and measured paint (m² each) |
+|---|---|---:|---:|---:|---:|
+| Both layouts · west | 3.95 × 8.00 | 31.6000 | 23.90 | 22.90 | 69.60 |
+| Two rooms · east | 5.95 × 8.00 | 47.6000 | 27.90 | 25.90 | 75.90 |
+| Three rooms · south-east | 5.95 × 2.95 | 17.5525 | 17.80 | 14.80 | 47.10 |
+| Three rooms · north-east | 5.95 × 4.95 | 29.4525 | 21.80 | 20.80 | 59.70 |
+
+P1 contributes `(8 × 3 − 1 × 2.1) × 0.1 = 2.190 m³`. At the T-junction P2 adds `(5.95 × 3 − 1 × 2.1) × 0.1 = 1.575 m³`. The slab stays at 80 m². Clear floor finishes total 79.200 m² with P1 and 78.605 m² with both walls. Exterior render stays at 107.100 m². At the checked-in AUD rates, including two paint coats and default wastage, the two-room subtotal is **AUD 57,038.34** and the three-room subtotal is **AUD 59,872.90**.
+
+The shell group holds the slab, roof, shell wall, individual partitions, openings and exterior finishes. Each room has its own measured finishes and subtotal. Partition volume uses the existing `WALL` rate and room lines use their existing trade rate codes. Naming a product in a finish description does not supply a new price.
+
 ## Measurement and document scope
 
 Model dimensions are in millimetres; browser geometry is in metres. Drawings distinguish internal clear dimensions from external overall dimensions. Wall corners are counted once. All take-off quantities are derived from compiled geometry, including hosted opening dimensions:
 
 - Floor finish and ceiling use the clear internal room area. Ceiling is an area allowance over that footprint; no ceiling framing or suspended system is modelled.
-- Skirting uses the clear internal perimeter minus every modelled door width; windows do not reduce it.
+- Each room takes skirting around its clear perimeter, less the door widths along that room. An internal door interrupts skirting on both room faces and counts as one door product.
 - Internal plaster/render and external render use their respective net vertical wall faces and deduct all modelled door/window opening voids. They are separate trades from the structural masonry volume.
 - Painting uses both sets of net wall faces. The description retains the measured net area; the editable coat count defaults to **2**. `Net painted quantity = measured area x coats`. Ceiling, floor, roof, reveals, sills and soffits are excluded from painting.
 - Each BOQ item has an editable wastage percentage. `Gross quantity = net quantity x (1 + wastage / 100)` and `Amount = gross quantity x rate`, rounded half-up to cents per row. Paint defaults to 0% wastage, with coats applied separately. Wastage is a pricing allowance, not a change to model dimensions.
@@ -154,6 +171,9 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | `housesync/schema.py` | Validated house parameters, legacy prices and rate overrides |
 | `rates/rates_aud.csv` | Editable, versioned default rate library with source/date per BOQ item |
 | `housesync/rates.py` | CSV validation, library fingerprint and snapshot data |
+| `housesync/layout.py` | Orthogonal regions, stable room IDs, finish selections and application checks |
+| `housesync/room_geometry.py` | Compiled room solids and wall-face takeoff |
+| `housesync/room_boq.py` | Shell and room BOQ lines, allowances and subtotals |
 | `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
 | `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
 | `housesync/changes.py` | Described A-to-B revision comparison and change-cost report exports |
@@ -164,10 +184,12 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py tests/test_rate_library.py tests/test_housesync_rate_design.py tests/test_housesync_rate_workflow.py tests/test_housesync_rate_provenance.py tests/test_housesync_purchasing.py -q
+$houseTests = (Get-ChildItem tests/test_housesync*.py).FullName
+.venv\Scripts\python.exe -m pytest @houseTests tests/test_rate_library.py -q
 .venv\Scripts\ruff.exe check .
 Get-ChildItem housesync/static -Filter *.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
-node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor.test.mjs tests/purchasing.test.mjs
+$editorTests = (Get-ChildItem tests/*.test.mjs).FullName
+node --test @editorTests
 ~~~
 
 Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Linux/macOS use build123d 0.11, preserving the advanced geometry API and Python 3.13 compatibility used by the upstream test suite.
