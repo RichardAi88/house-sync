@@ -75,6 +75,22 @@
           <div class="rate-field"><label for="wastage-internal-plaster">Internal plaster/render / %</label><input id="wastage-internal-plaster" type="number" min="0" max="100" step="any" value="5" required></div>
           <div class="rate-field"><label for="wastage-external-render">External render / %</label><input id="wastage-external-render" type="number" min="0" max="100" step="any" value="5" required></div>
         </details>
+        <details class="rate-details quote-pricing-editor">
+          <summary>Variation quote pricing <span>revision B</span></summary>
+          <p class="field-note">Save these settings in the new house revision, then compare A to B. The client quote uses B's saved pricing.</p>
+          <label class="field">Builder name<input id="builder-name" maxlength="120" value=""></label>
+          <label class="field">Combined overhead and margin (%)<input id="quote-markup" type="number" min="0" max="1000" step="any" value="20" required></label>
+          <p class="field-note">A markup on cost, combining overhead and margin.</p>
+          <label class="field">Administration fee (AUD)<input id="quote-admin" type="number" min="0" max="1000000" step="0.01" value="0" required></label>
+          <label class="field">GST (%)<input id="quote-gst" type="number" value="10" readonly aria-readonly="true"></label>
+          <label class="field">Credit treatment<select id="quote-credit-treatment"><option value="at_cost">Credit at cost</option><option value="including_margin">Credit including margin</option></select></label>
+          <label class="field">Quote validity (days)<input id="quote-validity" type="number" min="1" max="365" step="1" value="14" required></label>
+          <label class="field">Plain-English client description<textarea id="client-description" rows="3" maxlength="2000" placeholder="Optional description of the requested change"></textarea></label>
+          <div class="allowance-heading"><strong>PC / PS allowances</strong><div><button id="add-pc-allowance" type="button" class="text-button">Add PC</button><button id="add-ps-allowance" type="button" class="text-button">Add PS</button></div></div>
+          <p class="field-note">Separate prime cost and provisional sum lines. Enter only the allowance and note actually agreed for this revision.</p>
+          <p id="allowances-empty" class="field-note">No PC or PS allowances.</p>
+          <div id="quote-allowances"></div>
+        </details>
         <button id="build-button" type="submit" class="primary-button"><span class="button-icon" aria-hidden="true">↻</span><span id="build-label">Update house &amp; documents</span></button>
         <p id="form-status" class="form-status" aria-live="polite">Loading your house…</p>
         <p id="error-message" class="error-message" role="alert" hidden></p>
@@ -125,9 +141,17 @@
         <p id="comparison-error" class="error-message" role="alert" hidden></p>
         <p id="comparison-draft-note" class="comparison-draft-note" hidden>Current edits have not been saved. This comparison uses the selected saved revisions.</p>
         <div class="variation-export" aria-label="Variation order PDF">
-          <div><span class="variation-draft-label">DRAFT VARIATION ORDER</span><p id="variation-export-note">Export the selected A to B change, cost breakdown and approval fields for review.</p></div>
-          <a id="export-variation-pdf" data-change-file="variation_pdf" class="variation-export-button disabled" aria-disabled="true" aria-describedby="variation-export-note" tabindex="-1"><span aria-hidden="true">PDF</span> Export variation order PDF</a>
+          <div><span class="variation-draft-label">SAVED A-TO-B EXPORTS</span><p id="variation-export-note">Client quote and internal itemised breakdown are separate documents for the selected saved revisions.</p></div>
+          <a id="export-variation-pdf" data-change-file="internal_breakdown_pdf" class="variation-export-button disabled" aria-disabled="true" aria-describedby="variation-export-note" tabindex="-1"><span aria-hidden="true">PDF</span> Internal itemised breakdown PDF</a>
         </div>
+        <div class="client-quote-export"><a id="export-client-quote" data-change-file="client_quote_pdf" data-client-quote="true" class="variation-export-button disabled" aria-disabled="true" tabindex="-1">Client variation quote PDF</a><p id="client-quote-export-note">Compare saved AUD revisions to prepare a client quote. Pending edits must be saved first.</p></div>
+        <section id="client-quote-summary" class="client-quote-summary" hidden aria-label="Client variation quote summary">
+          <div class="document-heading"><div><h3>Client variation quote</h3><p id="quote-saved-revisions"></p></div><span class="snapshot-label">DRAFT</span></div>
+          <p id="quote-reference"></p><p id="quote-builder"></p><p id="quote-description"></p><ul id="quote-scope"></ul>
+          <p id="quote-credit-policy"></p><p id="quote-dates"></p>
+          <dl id="quote-waterfall" class="quote-waterfall"></dl>
+          <h4>PC / PS allowance movements</h4><p id="quote-no-allowances">No allowance movements.</p><div class="table-scroll"><table class="quote-allowance-table"><thead><tr><th>Type / ID</th><th>Description</th><th>A</th><th>B</th><th>Movement</th><th>Note</th></tr></thead><tbody id="quote-allowance-lines"></tbody></table></div>
+        </section>
         <div id="comparison-result" hidden>
           <div class="comparison-metrics" aria-label="Cost comparison">
             <div><span>Revision A estimate</span><strong id="compare-cost-before">-</strong></div>
@@ -139,7 +163,7 @@
           <section id="comparison-library-section" class="change-summary-section" hidden><h4>Rate library changes</h4><ul id="comparison-library-summary" class="change-summary"></ul></section>
           <section class="change-cost-section"><div class="change-table-heading"><h4>BOQ cost impact</h4><span>Positive = increase &middot; Negative = saving</span></div><div class="table-scroll"><table class="change-table"><thead><tr><th scope="col">Item &amp; change</th><th scope="col">Quantity A &rarr; B</th><th scope="col">Rate A &rarr; B</th><th scope="col">Cost A</th><th scope="col">Cost B</th><th scope="col">Difference</th></tr></thead><tbody id="comparison-items"></tbody><tfoot><tr><th colspan="5" scope="row">Net estimate change</th><td id="comparison-table-total">-</td></tr></tfoot></table></div></section>
           <details class="cost-effects"><summary>How the difference is calculated</summary><p>Quantity effect uses the original rate. Rate effect uses the new quantity. Rounding reconciles these effects to the rounded BOQ amounts. Recorded provenance separates library rate changes from design override changes.</p><div><span>Quantity effect <strong id="compare-quantity-effect">-</strong></span><span>Rate effect <strong id="compare-rate-effect">-</strong></span><span>Rounding <strong id="compare-rounding-effect">-</strong></span></div><div class="rate-effect-split"><span>Library rate effect <strong id="compare-library-effect">-</strong></span><span>Override rate effect <strong id="compare-override-effect">-</strong></span><span>Unattributed rate effect <strong id="compare-unattributed-effect">-</strong></span></div></details>
-          <div class="change-report-downloads" aria-label="Download change report"><div><strong>Capture this change</strong><span>Revision A and B are recorded in every report.</span></div><div class="download-links"><a data-change-file="changes_xlsx" class="download-link disabled" aria-disabled="true">Excel</a><a data-change-file="changes_csv" class="download-link disabled" aria-disabled="true">CSV</a><a data-change-file="changes_pdf" class="download-link disabled" aria-disabled="true">PDF</a><a data-change-file="changes_json" class="download-link disabled" aria-disabled="true">JSON</a></div></div>
+          <div class="change-report-downloads" aria-label="Download change report"><div><strong>Internal comparison records</strong><span>Revision A and B are recorded in every report.</span></div><div class="download-links"><a data-change-file="changes_xlsx" class="download-link disabled" aria-disabled="true">Internal Excel</a><a data-change-file="changes_csv" class="download-link disabled" aria-disabled="true">Internal CSV</a><a data-change-file="changes_pdf" class="download-link disabled" aria-disabled="true">Internal PDF</a><a data-change-file="changes_json" class="download-link disabled" aria-disabled="true">Internal JSON</a></div></div>
           <ul id="comparison-notes" class="comparison-notes"></ul>
         </div>
         <p class="comparison-basis">Estimate difference using the saved BOQs and their recorded unit rates. Demolition, rework, disruption, programme effects, fees and taxes are excluded unless separately priced. This is a cost comparison for review, not an approved contract variation.</p>

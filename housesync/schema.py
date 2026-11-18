@@ -3,13 +3,96 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal, Self
+from unicodedata import category
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from .rates import BOQ_CODES
 
 OPENING_CLEARANCE_MM = 100.0
+
+
+def _quote_text(value: Any, *, multiline: bool = False) -> str:
+    """Keep names/scope as plain text, preserving intentional paragraphs."""
+    if not isinstance(value, str):
+        raise ValueError("use plain text")
+    value = value.replace("\r\n", "\n").strip()
+    if any(category(character) == "Cc" and not (multiline and character == "\n") for character in value):
+        raise ValueError("plain text must not contain control characters")
+    return value
+
+
+def _aud_cents(value: Any) -> Any:
+    """Reject fractional cents instead of silently changing a commercial input."""
+    if isinstance(value, bool):
+        raise ValueError("AUD amounts must be numbers, not booleans")
+    try:
+        amount = Decimal(str(value))
+        if not amount.is_finite() or amount < 0 or amount != amount.quantize(Decimal("0.01")):
+            raise ValueError("AUD amounts must be finite, non-negative whole cents")
+    except InvalidOperation as exc:
+        raise ValueError("AUD amounts must be finite, non-negative whole cents") from exc
+    return value
+
+
+class BuilderPricing(BaseModel):
+    """Client quote settings; overhead/margin is one markup on the base cost."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, validate_assignment=True)
+
+    overhead_margin_percent: float = Field(default=20.0, ge=0, le=1000, title="Markup on cost (%)")
+    admin_fee_aud: float = Field(default=0.0, ge=0, le=1_000_000)
+    gst_percent: Literal[10] = 10
+    credit_treatment: Literal["at_cost", "including_margin"] = "at_cost"
+    validity_days: StrictInt = Field(default=14, ge=1, le=365)
+    builder_name: str = Field(default="", max_length=120)
+    client_description: str = Field(default="", max_length=2000)
+
+    @field_validator("overhead_margin_percent", mode="before")
+    @classmethod
+    def numeric_markup(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("markup on cost must be a number, not a boolean")
+        return value
+
+    @field_validator("admin_fee_aud", mode="before")
+    @classmethod
+    def whole_cent_admin_fee(cls, value: Any) -> Any:
+        return _aud_cents(value)
+
+    @field_validator("builder_name", mode="before")
+    @classmethod
+    def plain_builder_name(cls, value: Any) -> str:
+        return _quote_text(value)
+
+    @field_validator("client_description", mode="before")
+    @classmethod
+    def plain_client_scope(cls, value: Any) -> str:
+        return _quote_text(value, multiline=True)
+
+
+class AllowanceSettings(BaseModel):
+    """A separately identified provisional sum or prime-cost allowance in AUD."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, validate_assignment=True)
+
+    id: str = Field(pattern=r"^AL[1-9][0-9]{0,5}$")
+    kind: Literal["provisional_sum", "prime_cost"]
+    description: str = Field(min_length=1, max_length=240)
+    amount: float = Field(ge=0, le=10_000_000)
+    note: str = Field(default="", max_length=1000)
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def whole_cent_amount(cls, value: Any) -> Any:
+        return _aud_cents(value)
+
+    @field_validator("description", "note", mode="before")
+    @classmethod
+    def plain_allowance_labels(cls, value: Any) -> str:
+        return _quote_text(value, multiline=True)
 
 
 class WastageSettings(BaseModel):
@@ -104,6 +187,15 @@ class HouseSettings(BaseModel):
     rate_source: str = Field(default="Illustrative AUD rates, not a tender estimate; no supplier quotes", min_length=1, max_length=240)
     rate_date: date = Field(default=date(2026, 11, 17))
     openings: list[OpeningSettings] = Field(default_factory=default_openings, max_length=40)
+    builder_pricing: BuilderPricing = Field(default_factory=BuilderPricing)
+    allowances: list[AllowanceSettings] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_allowances(self) -> Self:
+        identities = [allowance.id for allowance in self.allowances]
+        if len(identities) != len(set(identities)):
+            raise ValueError("allowance IDs must be unique")
+        return self
 
     @model_validator(mode="before")
     @classmethod

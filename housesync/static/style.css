@@ -21,3 +21,163 @@
 .override-item{margin:12px 0 16px}.override-item .rate-field{flex-wrap:wrap;gap:6px;margin-bottom:4px}.override-item .rate-field label{flex-basis:100%;font-weight:600}.override-item .rate-field input{flex:1;min-width:90px;width:0}.reset-rate{font-size:9px;color:#456e62;border:1px solid #ccddd4;border-radius:4px;background:#f2f7f3;padding:7px 8px;white-space:nowrap}.reset-rate:disabled{cursor:default;opacity:.45}.override-library{font-size:9px;line-height:1.5;color:#7e9188}.rate-details .field{margin-top:16px}.library-fingerprint{font-family:ui-monospace,monospace;font-size:9px;line-height:1.7;overflow-wrap:anywhere;color:#71867b;margin:6px 0}.library-message{font-size:11px;line-height:1.7;margin:14px 0 20px;padding:12px;background:#f2f7f1;border:1px solid #dce7dc;border-radius:5px}.rates-table{font-size:10px;line-height:1.6;border-collapse:collapse;width:100%;min-width:820px}.rates-table th,.rates-table td{padding:11px 9px;border-bottom:1px solid #e2eae0;text-align:left;vertical-align:top}.rates-table th{font-size:9px;color:#6d8271;background:#f2f6ef}.rates-table td:nth-child(2){min-width:150px}.rates-table td:nth-child(6),.rates-table td:nth-child(8){min-width:180px}.rates-table td:nth-child(4){text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.rates-table td:nth-child(7){white-space:nowrap}.boq-table td:nth-child(8){white-space:normal;text-align:left;min-width:180px;font-size:9px;overflow-wrap:anywhere}.boq-table th:nth-child(8){text-align:left}
 
 .library-override-cell{min-width:130px}.library-override-cell input{font-size:11px;max-width:145px;padding:7px}.library-override-currency{display:block;font-size:9px;color:#7b8f80;margin-top:5px}.rates-table th:last-child,.rates-table td:last-child{white-space:nowrap}.rate-effect-split{margin-top:12px}
+
+/* Variation quote settings and allowances */
+.field textarea {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid #d4dfe0;
+  border-radius: 7px;
+  padding: 9px;
+  color: var(--ink);
+  resize: vertical;
+  background: #fff;
+}
+
+.allowance-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  font-size: 10px;
+  margin: 20px 0 12px;
+}
+
+.allowance-heading > div {
+  display: flex;
+  gap: 12px;
+}
+
+.allowance-editor {
+  border: 1px solid #dce7df;
+  border-radius: 6px;
+  padding: 11px;
+  margin: 12px 0;
+  background: #f8fbf6;
+}
+
+.allowance-editor > strong {
+  display: block;
+  font-size: 10px;
+  color: #526f5b;
+  margin-bottom: 11px;
+}
+
+.allowance-editor .field {
+  font-size: 9px;
+  margin-bottom: 10px;
+}
+
+.allowance-remove {
+  color: #a56d57;
+  margin-top: 3px;
+}
+
+.client-quote-export {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px;
+  border: 1px solid #cfe0d4;
+  border-radius: 7px;
+  background: #eff7ef;
+  margin-bottom: 20px;
+}
+
+.client-quote-export p {
+  font-size: 10px;
+  line-height: 1.7;
+  color: #6f8873;
+  max-width: 470px;
+}
+
+.client-quote-summary {
+  border: 1px solid #d8e4d7;
+  border-radius: 7px;
+  padding: 20px;
+  margin: 20px 0;
+  background: #fcfefa;
+}
+
+.client-quote-summary > p, .client-quote-summary > ul {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #6a806d;
+  margin: 9px 0;
+}
+
+.client-quote-summary h4 {
+  font-size: 11px;
+  color: #4b7054;
+  margin: 21px 0 12px;
+}
+
+.quote-waterfall {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 0;
+  margin: 20px 0;
+  border: 1px solid #dce6d9;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.quote-waterfall dt, .quote-waterfall dd {
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid #e6ede2;
+}
+
+.quote-waterfall dd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.quote-waterfall .quote-total {
+  background: #e9f3e6;
+  font-weight: 650;
+  color: #2e6341;
+}
+
+.quote-allowance-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 650px;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.quote-allowance-table th, .quote-allowance-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 10px 8px;
+  border-bottom: 1px solid #e3eade;
+}
+
+.quote-allowance-table th {
+  font-size: 9px;
+  color: #6e8371;
+  background: #f3f7ef;
+}
+
+.quote-allowance-table td:nth-child(n+3):nth-child(-n+5) {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#quote-description, .quote-allowance-table td:last-child {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.client-quote-export .variation-export-button {
+  white-space: normal;
+}

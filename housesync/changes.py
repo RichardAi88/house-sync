@@ -21,6 +21,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .quotes import diff_allowances
 from .rates import BOQ_CODES
 from .schema import HouseSettings
 
@@ -47,6 +48,13 @@ FIELD_LABELS = {
     "paint_coats": ("Paint coats", "finish"),
     "rate_source": ("Rate source", "pricing"),
     "rate_date": ("Rate date", "pricing"),
+    "builder_pricing.overhead_margin_percent": ("Overhead and margin markup on cost (%)", "pricing"),
+    "builder_pricing.admin_fee_aud": ("Variation administration fee (AUD)", "pricing"),
+    "builder_pricing.credit_treatment": ("Margin treatment for credits", "pricing"),
+    "builder_pricing.gst_percent": ("Quote GST (%)", "pricing"),
+    "builder_pricing.validity_days": ("Quote validity (days)", "pricing"),
+    "builder_pricing.builder_name": ("Builder name on the quote", "quote"),
+    "builder_pricing.client_description": ("Client variation description", "quote"),
     "rates.floor_finish_m2": ("Floor finish rate / m2", "rates"),
     "rates.ceiling_m2": ("Ceiling rate / m2", "rates"),
     "rates.skirting_m": ("Skirting rate / m", "rates"),
@@ -115,10 +123,11 @@ def _comparison_settings(settings: dict) -> dict:
     the original five rates and saved amounts remain exactly as recorded.
     """
     defaults = HouseSettings().model_dump(mode="json")
-    normalised = {key: value for key, value in settings.items() if key not in {"openings", "rates", "rate_overrides"}}
+    normalised = {key: value for key, value in settings.items() if key not in {"openings", "allowances", "rates", "rate_overrides"}}
     for field in ("paint_coats", "rate_source", "rate_date"):
         normalised.setdefault(field, defaults[field])
     normalised["wastage"] = {**defaults["wastage"], **settings.get("wastage", {})}
+    normalised["builder_pricing"] = {**defaults["builder_pricing"], **settings.get("builder_pricing", {})}
     # Legacy rate inputs become explicit absolute overrides, not library rates.
     # Compare their canonical meaning rather than their historical JSON shape.
     overrides = (dict(settings["rate_overrides"]) if "rate_overrides" in settings else
@@ -444,6 +453,16 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         setting_changes.append({"field": field, "label": label, "before": old, "after": new,
                                 "description": f"{label}: {_text(old)}{suffix} to {_text(new)}{suffix}.", "category": category})
     setting_changes.extend(_opening_changes(before["settings"], after["settings"]))
+    for line in diff_allowances(before["settings"].get("allowances", []), after["settings"].get("allowances", [])):
+        kind = "Prime cost item" if line["kind"] == "prime_cost" else "Provisional sum"
+        label = f"{kind} {line['id']}"
+        old_amount, new_amount = line["before_amount"], line["after_amount"]
+        description = f"{label} ({line['description']}): AUD {old_amount:,.2f} to AUD {new_amount:,.2f}."
+        if line["before"] and line["after"] and old_amount == new_amount:
+            description = f"Updated {label.lower()} ({line['description']}) at the same allowance of AUD {new_amount:,.2f}."
+        setting_changes.append({"field": f"allowances.{line['id']}", "label": label,
+                                "before": line["before"], "after": line["after"], "description": description,
+                                "category": "allowances"})
 
     items = []
     for code in dict.fromkeys([*old_rows, *new_rows]):
@@ -551,8 +570,8 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         "after_label": after["settings"].get("project_name", "Revision B"),
         "before_created_at": before.get("created_at"), "after_created_at": after.get("created_at"),
         "currency": currency, "setting_changes": setting_changes, "items": items, "totals": totals,
-        "design_changes": [item for item in setting_changes if item["category"] not in {"rates", "pricing"}],
-        "pricing_changes": [item for item in setting_changes if item["category"] in {"rates", "pricing"}],
+        "design_changes": [item for item in setting_changes if item["category"] not in {"rates", "pricing", "quote", "allowances"}],
+        "pricing_changes": [item for item in setting_changes if item["category"] in {"rates", "pricing", "quote", "allowances"}],
         "library_changes": library_changes, "before_rate_library": _saved_library(before), "after_rate_library": _saved_library(after),
         "rate_provenance": _provenance_rows(before, after, old_rows, new_rows, items),
         "summary": [item["description"] for item in [*setting_changes, *library_changes]] or [item["description"] for item in items],
