@@ -393,3 +393,16 @@ def test_shutdown_requires_an_explicit_trusted_request(http_application):
     status, body, _ = request("POST", "/api/shutdown", {"application": "House Sync"})
     assert status == 200
     assert json.loads(body)["status"] == "stopping"
+
+
+def test_partition_preview_returns_rooms_before_access_is_resolved_without_publication(http_application, fake_exports):
+    application, request, _ = http_application
+    draft = HouseSettings().model_dump(mode="json")
+    draft["partitions"] = [{"id": "P1", "start_mm": [4000, 0], "end_mm": [4000, 8000],
+                            "height_mm": 3000, "thickness_mm": 100, "wall_type": "partition"}]
+    status, body, _ = request("POST", "/api/layout", draft)
+    preview = json.loads(body)
+    assert status == 200
+    assert sorted(room["area_m2"] for room in preview["rooms"]) == [31.6, 47.6]
+    assert any("unreachable" in error for error in preview["checks"]["errors"])
+    assert not fake_exports["builds"] and application.revisions() == []

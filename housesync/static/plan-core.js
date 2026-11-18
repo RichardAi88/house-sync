@@ -53,10 +53,40 @@ export function cloneSettings(settings) {
   return result;
 }
 
+const partitionList = settings => Array.isArray(settings?.partitions) ? settings.partitions.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
+const pointValue = value => Array.isArray(value) ? { x: value.length === 2 ? value[0] : NaN, y: value.length === 2 ? value[1] : NaN } : { x: value?.x, y: value?.y };
+const finitePoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y);
+
+export function planHosts(settings) {
+  return [...HOSTS, ...partitionList(settings).map(partition => partition.id).filter(id => typeof id === 'string')];
+}
+
+export function hostGeometry(settings, host) {
+  const length = settings?.length_mm, width = settings?.width_mm;
+  let start, end;
+  switch (host) {
+    case 'W1': start = { x: 0, y: 0 }; end = { x: length, y: 0 }; break;
+    case 'W2': start = { x: length, y: 0 }; end = { x: length, y: width }; break;
+    case 'W3': start = { x: length, y: width }; end = { x: 0, y: width }; break;
+    case 'W4': start = { x: 0, y: width }; end = { x: 0, y: 0 }; break;
+    default: {
+      const partition = partitionList(settings).find(item => item.id === host);
+      start = pointValue(partition?.start_mm); end = pointValue(partition?.end_mm);
+    }
+  }
+  const span = finitePoint(start) && finitePoint(end) ? Math.hypot(end.x - start.x, end.y - start.y) : NaN;
+  const partition = partitionList(settings).find(item => item.id === host);
+  return { start, end, length: span, direction: { x: (end.x - start.x) / span, y: (end.y - start.y) / span },
+    height_mm: partition ? (partition.height_mm ?? 3000) : settings?.height_mm,
+    thickness_mm: partition ? (partition.thickness_mm ?? 100) : settings?.wall_thickness_mm };
+}
+
+export function hostDirection(settings, host) { return hostGeometry(settings, host).direction; }
+
 export function hostLength(settings, host) {
   if (host === 'W1' || host === 'W3') return settings?.length_mm;
   if (host === 'W2' || host === 'W4') return settings?.width_mm;
-  return NaN;
+  return hostGeometry(settings, host).length;
 }
 
 export function openingOffset(settings, opening) {
@@ -75,7 +105,11 @@ export function openingSegment(settings, opening) {
     case 'W2': a = { x: length, y: start }; b = { x: length, y: end }; break;
     case 'W3': a = { x: length - start, y: width }; b = { x: length - end, y: width }; break;
     case 'W4': a = { x: 0, y: width - start }; b = { x: 0, y: width - end }; break;
-    default: a = { x: NaN, y: NaN }; b = { x: NaN, y: NaN };
+    default: {
+      const host = hostGeometry(settings, opening?.host);
+      a = { x: host.start.x + host.direction.x * start, y: host.start.y + host.direction.y * start };
+      b = { x: host.start.x + host.direction.x * end, y: host.start.y + host.direction.y * end };
+    }
   }
   return { start: a, end: b, center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
 }
@@ -87,7 +121,10 @@ export function pointToOffset(settings, host, point, openingWidth) {
     case 'W2': distance = point?.y; break;
     case 'W3': distance = settings?.length_mm - point?.x; break;
     case 'W4': distance = settings?.width_mm - point?.y; break;
-    default: return NaN;
+    default: {
+      const frame = hostGeometry(settings, host);
+      distance = (point?.x - frame.start.x) * frame.direction.x + (point?.y - frame.start.y) * frame.direction.y;
+    }
   }
   return distance - openingWidth / 2;
 }
@@ -97,6 +134,68 @@ export function snap(value, spacing = 100) {
   if (!Number.isFinite(spacing) || spacing <= 0) return value;
   const result = Math.round(value / spacing) * spacing;
   return Object.is(result, -0) ? 0 : result;
+}
+
+function intersection(one, two) {
+  if (![one.start, one.end, two.start, two.end].every(finitePoint)) return null;
+  const denominator = one.direction.x * two.direction.y - one.direction.y * two.direction.x;
+  if (Math.abs(denominator) < EPSILON) return null;
+  const dx = two.start.x - one.start.x, dy = two.start.y - one.start.y;
+  const along = (dx * two.direction.y - dy * two.direction.x) / denominator;
+  const across = (dx * one.direction.y - dy * one.direction.x) / denominator;
+  if (along < -EPSILON || along > one.length + EPSILON || across < -EPSILON || across > two.length + EPSILON) return null;
+  return { x: one.start.x + one.direction.x * along, y: one.start.y + one.direction.y * along, offset: along };
+}
+
+function auditPartitions(settings) {
+  const issues = [], source = settings.partitions === undefined ? [] : settings.partitions;
+  if (!Array.isArray(source)) return ['Partitions must be a list of internal walls.'];
+  if (source.length > 40) issues.push('Use no more than 40 partitions.');
+  const ids = new Set(), valid = [];
+  for (const [index, partition] of source.entries()) {
+    if (!partition || typeof partition !== 'object' || Array.isArray(partition)) { issues.push('Partition ' + (index + 1) + ' needs valid properties.'); continue; }
+    const label = typeof partition.id === 'string' ? partition.id : 'Partition ' + (index + 1);
+    if (!/^P[1-9]\d{0,2}$/.test(String(partition.id ?? ''))) issues.push(label + ': use a stable P1-P999 ID.');
+    if (ids.has(partition.id)) issues.push(label + ': partition IDs must be unique.');
+    ids.add(partition.id);
+    const a = pointValue(partition.start_mm), b = pointValue(partition.end_mm);
+    if (!finitePoint(a) || !finitePoint(b)) { issues.push(label + ': endpoints must contain finite millimetre coordinates.'); continue; }
+    const horizontal = Math.abs(a.y - b.y) <= EPSILON, vertical = Math.abs(a.x - b.x) <= EPSILON;
+    if ((!horizontal && !vertical) || Math.hypot(b.x - a.x, b.y - a.y) <= EPSILON) { issues.push(label + ': draw a non-zero horizontal or vertical partition.'); continue; }
+    const thickness = partition.thickness_mm ?? 100, height = partition.height_mm ?? 3000;
+    if (!Number.isFinite(thickness) || thickness < 50 || thickness > 500) issues.push(label + ': thickness must be between 50 and 500 mm.');
+    if (!Number.isFinite(height) || height < 300 || height > 5000 || height > settings.height_mm + EPSILON) issues.push(label + ': height must be between 300 mm and the shell wall height.');
+    if (partition.wall_type !== undefined && (typeof partition.wall_type !== 'string' || !partition.wall_type.trim() || partition.wall_type.length > 80 || /[\x00-\x1F]/.test(partition.wall_type))) issues.push(label + ': enter a single-line wall type of up to 80 characters.');
+    const x0 = Math.min(a.x, b.x) - (vertical ? thickness / 2 : 0), x1 = Math.max(a.x, b.x) + (vertical ? thickness / 2 : 0);
+    const y0 = Math.min(a.y, b.y) - (horizontal ? thickness / 2 : 0), y1 = Math.max(a.y, b.y) + (horizontal ? thickness / 2 : 0);
+    if (x0 < -EPSILON || y0 < -EPSILON || x1 > settings.length_mm + EPSILON || y1 > settings.width_mm + EPSILON) issues.push(label + ': partition thickness and endpoints must stay inside the clear shell.');
+    valid.push({ partition, a, b, horizontal, vertical, x0, x1, y0, y1 });
+  }
+  for (let index = 0; index < valid.length; index++) for (const other of valid.slice(index + 1)) {
+    const one = valid[index];
+    const overlapX = Math.min(one.x1, other.x1) - Math.max(one.x0, other.x0), overlapY = Math.min(one.y1, other.y1) - Math.max(one.y0, other.y0);
+    const joined = intersection(hostGeometry(settings, one.partition.id), hostGeometry(settings, other.partition.id));
+    if (overlapX > EPSILON && overlapY > EPSILON && !joined) issues.push(one.partition.id + ' and ' + other.partition.id + ': wall bodies overlap without a perpendicular centreline junction.');
+    if (one.horizontal === other.horizontal && ((one.horizontal && Math.abs(one.a.y - other.a.y) <= EPSILON && overlapX > EPSILON) || (one.vertical && Math.abs(one.a.x - other.a.x) <= EPSILON && overlapY > EPSILON))) issues.push(one.partition.id + ' and ' + other.partition.id + ': collinear partitions overlap.');
+  }
+  const minimum = settings.min_room_width_mm === undefined ? 900 : settings.min_room_width_mm;
+  if (!Number.isFinite(minimum) || minimum < 300 || minimum > 10000) issues.push('Minimum room width must be between 300 and 10000 mm.');
+  const rooms = settings.rooms === undefined ? [] : settings.rooms;
+  if (!Array.isArray(rooms)) issues.push('Room metadata must be a list.');
+  else {
+    if (rooms.length > 200) issues.push('Use no more than 200 room metadata entries.');
+    const roomIds = new Set();
+    for (const room of rooms) {
+      if (!room || typeof room !== 'object' || Array.isArray(room)) { issues.push('Room metadata needs a valid room ID and name.'); continue; }
+      if (!/^ROOM(?:[1-9]\d*|_[A-F0-9]{12})$/.test(String(room.id ?? ''))) issues.push('Use a derived stable room ID for room metadata.');
+      if (roomIds.has(room.id)) issues.push('Room metadata IDs must be unique.');
+      roomIds.add(room.id);
+      if (typeof room.name !== 'string' || !room.name.trim() || room.name.length > 120 || /[\x00-\x1F]/.test(room.name)) issues.push(String(room.id) + ': enter a single-line room name of up to 120 characters.');
+      if (room.finishes !== undefined && (!room.finishes || typeof room.finishes !== 'object' || Array.isArray(room.finishes))) issues.push(String(room.id) + ': finishes must be an object.');
+      else for (const [key, value] of Object.entries(room.finishes ?? {})) if (!['floor', 'ceiling', 'skirting', 'paint'].includes(key) || (value !== null && (typeof value !== 'string' || !value.trim() || value.length > 120 || /[\x00-\x1F]/.test(value)))) issues.push(String(room.id) + ': enter a valid single-line ' + key + ' finish or leave it unset.');
+    }
+  }
+  return issues;
 }
 
 export function auditPlan(settings) {
@@ -109,11 +208,12 @@ export function auditPlan(settings) {
   for (const [key, label, minimum, maximum] of bounds) {
     if (!Number.isFinite(settings[key]) || settings[key] < minimum || settings[key] > maximum) issues.push(label + ' must be between ' + minimum + ' and ' + maximum + ' mm.');
   }
+  issues.push(...auditPartitions(settings));
   const openings = settings.openings === undefined ? defaultOpenings() : settings.openings;
   if (!Array.isArray(openings)) return [...issues, 'Openings must be a list of doors and windows.'];
   if (openings.length > 40) issues.push('Use no more than 40 openings.');
   const ids = new Set();
-  const spans = Object.fromEntries(HOSTS.map(host => [host, []]));
+  const hosts = planHosts(settings), spans = Object.fromEntries(hosts.map(host => [host, []]));
   openings.forEach((opening, index) => {
     if (!opening || typeof opening !== 'object' || Array.isArray(opening)) {
       issues.push('Opening ' + (index + 1) + ' must have valid opening properties.');
@@ -125,7 +225,7 @@ export function auditPlan(settings) {
     ids.add(opening.id);
     if (!['door', 'window'].includes(opening.kind)) issues.push(label + ': choose door or window.');
     else if (!String(opening.id ?? '').startsWith(opening.kind === 'door' ? 'D' : 'N')) issues.push(label + ': door IDs start with D; window IDs start with N.');
-    if (!HOSTS.includes(opening.host)) issues.push(label + ': choose a host wall W1-W4.');
+    if (!hosts.includes(opening.host)) issues.push(label + ': choose an existing shell wall or partition host.');
     const widthOK = Number.isFinite(opening.width_mm) && opening.width_mm >= 300 && opening.width_mm <= 30000;
     const heightOK = Number.isFinite(opening.height_mm) && opening.height_mm >= 300 && opening.height_mm <= 4900;
     const sillOK = Number.isFinite(opening.sill_mm) && opening.sill_mm >= 0 && opening.sill_mm <= 4500;
@@ -133,7 +233,8 @@ export function auditPlan(settings) {
     if (!heightOK) issues.push(label + ': opening height must be between 300 and 4900 mm.');
     if (!sillOK) issues.push(label + ': sill must be between 0 and 4500 mm.');
     if (opening.kind === 'door' && opening.sill_mm !== 0) issues.push(label + ': doors must start at floor level (sill 0 mm).');
-    if (heightOK && sillOK && Number.isFinite(settings.height_mm) && opening.sill_mm + opening.height_mm > settings.height_mm - 100 + EPSILON) {
+    const hostHeight = hostGeometry(settings, opening.host).height_mm;
+    if (heightOK && sillOK && Number.isFinite(hostHeight) && opening.sill_mm + opening.height_mm > hostHeight - 100 + EPSILON) {
       issues.push(label + ': leave at least 100 mm between the opening head and wall top.');
     }
     const offset = openingOffset(settings, opening);
@@ -144,8 +245,14 @@ export function auditPlan(settings) {
       issues.push(label + ': leave at least 100 mm from both ends of ' + opening.host + '.');
     }
     if (spans[opening.host] && widthOK && Number.isFinite(offset)) spans[opening.host].push({ id: label, start: offset, end: offset + opening.width_mm });
+    if (widthOK && Number.isFinite(offset)) for (const partition of partitionList(settings)) {
+      if (partition.id === opening.host) continue;
+      const joined = intersection(hostGeometry(settings, opening.host), hostGeometry(settings, partition.id));
+      const exclusion = (partition.thickness_mm ?? 100) / 2 + 100;
+      if (joined && offset < joined.offset + exclusion - EPSILON && offset + opening.width_mm > joined.offset - exclusion + EPSILON) issues.push(label + ': leave at least 100 mm clear of the ' + partition.id + ' junction footprint.');
+    }
   });
-  for (const host of HOSTS) {
+  for (const host of hosts) {
     const intervals = spans[host].sort((a, b) => a.start - b.start || a.end - b.end);
     let previous = intervals[0];
     for (const current of intervals.slice(1)) {
@@ -171,7 +278,7 @@ export function nextOpeningId(settings, kind, reservedIds = []) {
 const format = value => Number.isFinite(value) ? value.toLocaleString('en-GB', { maximumFractionDigits: 3 }) : String(value);
 const same = (a, b) => Number.isFinite(a) && Number.isFinite(b) ? Math.abs(a - b) <= EPSILON : Object.is(a, b);
 const openingList = settings => Array.isArray(settings.openings) ? settings.openings : [];
-const location = (settings, opening) => opening.host + ' (' + (HOST_LABELS[opening.host] || 'unknown') + '), start ' + format(openingOffset(settings, opening)) + ' mm';
+const location = (settings, opening) => opening.host + ' (' + (HOST_LABELS[opening.host] || (planHosts(settings).includes(opening.host) ? 'partition' : 'unknown')) + '), start ' + format(openingOffset(settings, opening)) + ' mm';
 
 export function describeChanges(before, after) {
   if (!before || !after) return [];
@@ -182,6 +289,26 @@ export function describeChanges(before, after) {
   }
   for (const [key, name] of [['project_name', 'Project name'], ['paint_colour', 'Paint finish'], ['paint_hex', 'Paint colour reference'], ['currency', 'Currency']]) {
     if (a[key] !== b[key]) descriptions.push(name + ': ' + String(a[key] ?? 'Not set') + ' to ' + String(b[key] ?? 'Not set') + '.');
+  }
+  if (!same(a.min_room_width_mm ?? 900, b.min_room_width_mm ?? 900)) descriptions.push('Minimum room width: ' + format(a.min_room_width_mm ?? 900) + ' to ' + format(b.min_room_width_mm ?? 900) + ' mm.');
+  const oldPartitions = new Map(partitionList(a).map(item => [item.id, item])), newPartitions = new Map(partitionList(b).map(item => [item.id, item]));
+  const pointText = point => '(' + format(point?.[0]) + ', ' + format(point?.[1]) + ')';
+  for (const [id] of oldPartitions) if (!newPartitions.has(id)) descriptions.push('Removed partition ' + id + '.');
+  for (const [id, partition] of newPartitions) {
+    const previous = oldPartitions.get(id);
+    if (!previous) { descriptions.push('Added partition ' + id + ': ' + pointText(partition.start_mm) + ' to ' + pointText(partition.end_mm) + ', ' + format(partition.thickness_mm ?? 100) + ' mm thick and ' + format(partition.height_mm ?? 3000) + ' mm high.'); continue; }
+    for (const [key, name] of [['start_mm', 'start'], ['end_mm', 'end']]) if (stable(previous[key]) !== stable(partition[key])) descriptions.push(id + ' ' + name + ': ' + pointText(previous[key]) + ' to ' + pointText(partition[key]) + ' mm.');
+    for (const [key, name, fallback] of [['thickness_mm', 'thickness', 100], ['height_mm', 'height', 3000]]) if (!same(previous[key] ?? fallback, partition[key] ?? fallback)) descriptions.push(id + ' ' + name + ': ' + format(previous[key] ?? fallback) + ' to ' + format(partition[key] ?? fallback) + ' mm.');
+    if ((previous.wall_type ?? 'partition') !== (partition.wall_type ?? 'partition')) descriptions.push(id + ' wall type: ' + String(previous.wall_type ?? 'partition') + ' to ' + String(partition.wall_type ?? 'partition') + '.');
+  }
+  const roomList = value => Array.isArray(value.rooms) ? value.rooms.filter(item => item && typeof item === 'object') : [];
+  const oldRooms = new Map(roomList(a).map(item => [item.id, item])), newRooms = new Map(roomList(b).map(item => [item.id, item]));
+  for (const [id, room] of oldRooms) if (!newRooms.has(id)) descriptions.push('Removed room metadata ' + id + ' (' + String(room.name) + ').');
+  for (const [id, room] of newRooms) {
+    const previous = oldRooms.get(id);
+    if (!previous) descriptions.push('Named room ' + id + ': ' + String(room.name) + '.');
+    else if (previous.name !== room.name) descriptions.push(id + ' name: ' + String(previous.name) + ' to ' + String(room.name) + '.');
+    for (const key of ['floor', 'ceiling', 'skirting', 'paint']) if ((previous?.finishes?.[key] ?? null) !== (room.finishes?.[key] ?? null)) descriptions.push(id + ' ' + key + ' finish: ' + String(previous?.finishes?.[key] ?? 'default') + ' to ' + String(room.finishes?.[key] ?? 'default') + '.');
   }
   const old = new Map(openingList(a).filter(item => item && typeof item === 'object').map(item => [item.id, item]));
   const current = new Map(openingList(b).filter(item => item && typeof item === 'object').map(item => [item.id, item]));
@@ -268,3 +395,76 @@ export function resizeShell(settings, length, width, spacing = 0) {
   next.width_mm = snap(width, spacing);
   return next;
 }
+
+export function nextPartitionId(settings, reservedIds = []) {
+  const ids = [...partitionList(settings).map(item => item.id), ...reservedIds];
+  const maximum = ids.reduce((largest, id) => {
+    const match = typeof id === 'string' && id.match(/^P([1-9]\d*)$/);
+    return match ? Math.max(largest, Number(match[1])) : largest;
+  }, 0);
+  if (maximum >= 999) throw new Error('All P partition IDs have been used. Reopen a design with available IDs.');
+  return 'P' + (maximum + 1);
+}
+
+export function snapPoint(settings, point, spacing = 100, tolerance = 150, excludeIds = []) {
+  const input = pointValue(point);
+  if (!finitePoint(input) || spacing === 0) return input;
+  const grid = { x: snap(input.x, spacing), y: snap(input.y, spacing) };
+  const candidates = [];
+  for (const host of planHosts(settings)) {
+    if (excludeIds.includes(host)) continue;
+    const frame = hostGeometry(settings, host);
+    if (!Number.isFinite(frame.length) || frame.length <= EPSILON) continue;
+    candidates.push({ point: frame.start, priority: 0 }, { point: frame.end, priority: 0 });
+    const along = Math.max(0, Math.min(frame.length, (grid.x - frame.start.x) * frame.direction.x + (grid.y - frame.start.y) * frame.direction.y));
+    candidates.push({ point: { x: frame.start.x + frame.direction.x * along, y: frame.start.y + frame.direction.y * along }, priority: 1 });
+  }
+  const close = candidates.map(({ point: candidate, priority }) => ({ candidate, priority, distance: Math.hypot(candidate.x - input.x, candidate.y - input.y) }))
+    .filter(item => item.distance <= tolerance + EPSILON).sort((a, b) => a.priority - b.priority || a.distance - b.distance);
+  return close.length ? { ...close[0].candidate } : grid;
+}
+
+export function movePartition(settings, id, dx, dy, spacing = 0) {
+  const next = cloneSettings(settings), partition = partitionList(next).find(item => item.id === id);
+  if (!partition) throw new Error('Partition ' + id + ' was not found.');
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error('Partition movement must use finite distances.');
+  const frame = hostGeometry(settings, id), horizontal = Math.abs(frame.direction.x) > .5;
+  const delta = horizontal ? { x: 0, y: snap(dy, spacing) } : { x: snap(dx, spacing), y: 0 };
+  const attached = point => {
+    const along = (point[0] - frame.start.x) * frame.direction.x + (point[1] - frame.start.y) * frame.direction.y;
+    const normal = (point[0] - frame.start.x) * frame.direction.y - (point[1] - frame.start.y) * frame.direction.x;
+    return Math.abs(normal) <= EPSILON && along >= -EPSILON && along <= frame.length + EPSILON;
+  };
+  for (const other of partitionList(next)) {
+    const direction = hostDirection(settings, other.id);
+    const perpendicular = Math.abs(direction.x * frame.direction.x + direction.y * frame.direction.y) < EPSILON;
+    for (const key of ['start_mm', 'end_mm']) if (other.id === id || (perpendicular && Array.isArray(other[key]) && attached(other[key]))) {
+      other[key] = [other[key][0] + delta.x, other[key][1] + delta.y];
+    }
+  }
+  return next;
+}
+
+export function resizePartition(settings, id, endpoint, point, spacing = 0) {
+  if (!['start', 'end'].includes(endpoint)) throw new Error('Choose the start or end partition grip.');
+  const next = cloneSettings(settings), partition = partitionList(next).find(item => item.id === id);
+  if (!partition) throw new Error('Partition ' + id + ' was not found.');
+  const target = pointValue(point);
+  if (!finitePoint(target)) throw new Error('Partition endpoint must use finite coordinates.');
+  const frame = hostGeometry(settings, id), horizontal = Math.abs(frame.direction.x) > .5;
+  const fixed = endpoint === 'start' ? partition.end_mm : partition.start_mm;
+  const candidate = horizontal ? { x: snap(target.x, spacing), y: fixed[1] } : { x: fixed[0], y: snap(target.y, spacing) };
+  const joined = snapPoint(settings, candidate, spacing, 150, [id]);
+  partition[endpoint + '_mm'] = horizontal ? [joined.x, fixed[1]] : [fixed[0], joined.y];
+  return next;
+}
+
+export function deletePartition(settings, id) {
+  const next = cloneSettings(settings);
+  if (!partitionList(next).some(item => item.id === id)) throw new Error('Partition ' + id + ' was not found.');
+  next.partitions = next.partitions.filter(item => item.id !== id);
+  next.openings = next.openings.filter(item => item?.host !== id);
+  return next;
+}
+
+export const removePartition = deletePartition;

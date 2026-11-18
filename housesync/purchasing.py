@@ -166,6 +166,8 @@ def purchase_order_pdf(result: dict, code: str) -> bytes:
     def paragraph(value: Any, style: str = "body") -> Paragraph:
         return Paragraph(html.escape(str(value)), styles[style])
 
+    if result.get("partitions") and row.get("group_name"):
+        description = f"{row['group_name']} — {description}"
     width = A4[0] - 72
     story: list[Any] = [paragraph("DRAFT PURCHASE ORDER", "title"),
                         paragraph("Saved BOQ reference - pending commercial completion and approval", "small"),
@@ -189,7 +191,7 @@ def purchase_order_pdf(result: dict, code: str) -> bytes:
             measured.append(f"{label}: {_number(row[key], label)}{suffix}")
     if measured:
         story.append(paragraph(" | ".join(measured), "small"))
-    if code == "PAINT":
+    if row.get("rate_code", code) == "PAINT":
         note = ("Painting retains the saved m2-per-coat measurement basis and recorded coat count. No conversion to litres, cans or product coverage is made."
                 if row.get("paint_coats") is not None else
                 f"Painting uses the saved {unit} quantity. A coat count was not recorded for this item; no coat multiplier or volume conversion is inferred.")

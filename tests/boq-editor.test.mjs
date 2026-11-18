@@ -67,6 +67,22 @@ test('explicit empty overrides keep a modern design library-driven despite a sta
   for (const [code] of RATE_ITEMS) assert.equal(document.querySelector('#override-' + code.toLowerCase().replaceAll('_', '-')).value, '');
 });
 
+test('sidebar rate edits retain partition geometry, room selections and minimum width', () => {
+  const design = { ...modern(), min_room_width_mm: 1200,
+    partitions: [{ id: 'P1', start_mm: [4000, 0], end_mm: [4000, 8000], thickness_mm: 100, height_mm: 3000, wall_type: 'Stud' }],
+    rooms: [{ id: 'ROOM_ABCDEF123456', name: 'Study', finishes: { floor: 'Cork' } }],
+  };
+  fillForm(design);
+  document.querySelector('#override-skirting').value = '24';
+  const saved = settingsFromForm();
+  assert.deepEqual(saved.partitions, design.partitions);
+  assert.deepEqual(saved.rooms, design.rooms);
+  assert.equal(saved.min_room_width_mm, 1200);
+  assert.equal(saved.rate_overrides.SKIRTING, 24);
+  fillForm(modern());
+  assert.deepEqual(settingsFromForm().partitions, []);
+});
+
 test('legacy JSON import resets absent controls and produces no false draft changes', () => {
   fillForm({ ...modern(), paint_coats: 7, wastage: { floor_finish: 90 }, rate_overrides: { CEILING: 999 }, rate_source: 'Previous file', rate_date: '2025-01-01' });
   const legacy = fixture(); fillForm(legacy); const submitted = settingsFromForm();

@@ -23,13 +23,14 @@ from pydantic import ValidationError
 from .changes import compare_revisions, export_change_report
 from .documents import export_documents
 from .engine import build_house, revision_for
+from .layout import derive_layout
 from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
 from .rates import RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
-MAX_BODY = 32768
+MAX_BODY = 256 * 1024
 REVISION = re.compile(r"^[0-9a-f]{12}$")
 COMPARISON = re.compile(r"^[0-9a-f]{12}_[0-9a-f]{12}_[0-9a-f]{12}$")
 
@@ -360,7 +361,7 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                 self._reject_post("Origin is not allowed", 403)
                 return
             route = urlsplit(self.path).path
-            if route not in {"/api/build", "/api/shutdown"}:
+            if route not in {"/api/build", "/api/layout", "/api/shutdown"}:
                 self._json({"error": "Route not found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -372,6 +373,12 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "Invalid request size"}, 413)
                     return
                 body = self.rfile.read(length)
+                if route == "/api/layout":
+                    draft = json.loads(body)
+                    if not isinstance(draft, dict):
+                        raise ValueError("Send a house design object for the plan preview.")
+                    self._json(derive_layout(draft, validate=False))
+                    return
                 if route == "/api/shutdown":
                     if json.loads(body) != {"application": "House Sync"}:
                         self._json({"error": "Identify the application to stop."}, 422)
