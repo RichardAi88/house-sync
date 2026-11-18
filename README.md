@@ -7,10 +7,10 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 ## First version
 
 - A single-storey, single-room rectangular shell with a flat roof; one door and two windows by default.
-- Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, ten illustrative unit rates, per-item wastage, and rate source/date.
+- Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
 - A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
-- Eleven BOQ items in Excel/CSV, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage and gross priced quantity remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
+- Eleven BOQ items in Excel/CSV, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage, gross priced quantity and each item's rate basis remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
@@ -35,7 +35,7 @@ Select **Export variation order PDF** to download a draft variation order for th
 
 The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
-The comparison separates gross quantity effects (including coat count and wastage changes) from rate effects and reconciles them to rounded BOQ amounts. Missing new settings in older designs receive defaults when loaded and compared; saved revision BOQs and amounts remain immutable. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
+The comparison separates gross quantity effects (including coat count and wastage changes) from rate effects and reconciles them to rounded BOQ amounts. Where both saved revisions have a recorded library/override basis, the rate effect is also attributed to library changes and override changes. Historical rows without that evidence retain an unknown attribution instead of an invented split. Missing new settings in older designs receive defaults when loaded and compared; saved revision BOQs and amounts remain immutable. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
 
 ## Run on Windows
 
@@ -52,6 +52,40 @@ npm.cmd ci --cache .cache/npm
 After setup, double-click **start-house-sync.cmd**. Open **http://127.0.0.1:8766**. If the editor is already running, the launcher opens it. Keep the launcher running while using the editor; Ctrl+C stops it. GitHub stores source and history; this backend runs locally on this PC's loopback interface.
 
 On macOS/Linux use `.venv/bin/python -m housesync.server --open` after the same uv/npm setup. Initial local verification was on Windows with Python 3.12.
+
+## Maintain rates and overrides
+
+The editable default rate library is [`rates/rates_aud.csv`](rates/rates_aud.csv). It has one row for each BOQ code, including independent `DOOR` and `WINDOW` allowances. The checked-in values are **illustrative AUD rates, not a tender estimate** and do not represent supplier quotes or researched market prices. Every seeded row has `source` set to `illustrative`; its notes retain the disclaimer.
+
+| CSV column | Meaning |
+|---|---|
+| `code` | Stable BOQ code, such as `FLOOR_FINISH`; each of the eleven codes must occur once |
+| `description` | Description of the rate allowance |
+| `unit` | Item's measurement unit: `m2`, `m3`, `m` or `each`, matching its BOQ code |
+| `rate` | Positive unit rate up to 1,000,000. Coats and wastage are applied to the measured quantity. |
+| `currency` | One uppercase three-letter currency for the complete library; the default file uses `AUD` |
+| `source` | Actual source or an explicit illustrative label |
+| `effective_date` | Date of that rate's pricing basis, in `YYYY-MM-DD` format |
+| `notes` | Scope, exclusions or other rate qualifications |
+
+1. Edit the CSV in a text editor or spreadsheet application and save it as UTF-8 CSV. Keep all codes and their expected units, and keep one currency throughout the file. Supply genuine source/date information when replacing an illustrative allowance; the application does not obtain quotes for you.
+2. Open the editor's **Rates** tab and select **Refresh rate library**. Review the loaded values, sources, dates and notes. The tab identifies the current library SHA-256 and the library saved with the displayed revision.
+3. Edit an item's project override directly in the **Rates** panel or in the sidebar's **Rate overrides**. Leave the field blank to follow its library row; an explicit `0` is a zero-cost override. **Use library** clears that item's override from either location. The two controls edit the same draft value. Record the source/date for project overrides in the sidebar.
+4. Select **Update house & documents** to generate the coordinated model and documents at the reviewed rates. Refreshing the library or editing an override leaves the draft pending; it does not rewrite earlier snapshots.
+
+For a separate project library, start the server with an explicit file:
+
+~~~powershell
+.venv\Scripts\python.exe -m housesync.server --rates C:\path\to\project-rates.csv --open
+~~~
+
+The loader rejects invalid rows with a CSV line reference. A build needs either a library matching the design currency or explicit overrides for all eleven items; no exchange rate is assumed. A packaged installation includes the default CSV, so it does not depend on the current working directory.
+
+For example, the default 80 m2 floor finish has 10% wastage, giving **88 m2** gross. At AUD 65/m2 its amount is **AUD 5,720.00**. Changing the library rate to 70 with no override gives **AUD 6,160.00**, a **AUD 440.00 library rate effect**. Keeping the library at 65 and entering a 70 override gives the same amount, attributed to the override. If an override already pins the item at 70, changing the underlying library row does not change that item's effective rate.
+
+Each generated revision saves the library's full SHA-256 over its raw CSV bytes and its row data, plus the effective rates and their provenance. BOQ and specification exports identify whether each effective rate came from the library or an override, with the source/date. A source/date-only CSV edit changes the library fingerprint and may produce a new revision while leaving costs unchanged. Quantity, library and override effects are calculated in that order, with rounding reconciled to the saved item amounts.
+
+Existing designs with explicit stored rates retain those values as overrides rather than silently adopting the current library. Older pre-finishes designs in another currency may not contain prices for every new trade: they can be opened, but missing values or a matching-currency library must be supplied before building. Saved BOQs remain authoritative for historical comparisons, and different currencies still cannot be compared.
 
 ## A change you can verify
 
@@ -85,7 +119,7 @@ For example, the default internal wall faces are `2 x (10 + 8) x 3 - 5.7 = 102.3
 | External render, m2 | 40.00 | 5% | 4,498.20 | 5,002.20 | +504.00 |
 | **Subtotal** | | | **53,330.22** | **61,640.22** | **+8,310.00** |
 
-The shared opening rate covers both door and window allowances. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Coat count, each item's wastage and rates can be edited independently.
+The default library gives doors and windows the same AUD 650 allowance in separate rows; they can be priced independently. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Coat count, each item's wastage and rate overrides can be edited independently. The worked totals use the checked-in library with no overrides.
 
 ## Measurement and document scope
 
@@ -98,7 +132,7 @@ Model dimensions are in millimetres; browser geometry is in metres. Drawings dis
 - Each BOQ item has an editable wastage percentage. `Gross quantity = net quantity x (1 + wastage / 100)` and `Amount = gross quantity x rate`, rounded half-up to cents per row. Paint defaults to 0% wastage, with coats applied separately. Wastage is a pricing allowance, not a change to model dimensions.
 - The roof includes a 300 mm overhang. Door/window rows count parent products once, excluding emitted frame, leaf and glazing parts.
 
-New designs default to **AUD**. Rates are labelled **illustrative AUD rates, not a tender estimate**; they are demonstration inputs, not supplier quotes or market research. The editable rate source and rate date fields identify the pricing basis; the demonstration date is **2026-11-17**. Loading an old design preserves its explicit rates and currency, and fills omitted new fields with defaults. No currency conversion is inferred, and revisions in different currencies cannot be compared.
+New designs default to **AUD**. The library rates are labelled **illustrative AUD rates, not a tender estimate**; they are demonstration inputs, not supplier quotes or market research. Each CSV row supplies its own source and effective date; the demonstration date is **2026-11-17**. Project overrides retain their own source/date. Loading an old design preserves its explicitly stored rates and currency. No currency conversion is inferred, and revisions in different currencies cannot be compared.
 
 The BOQ now includes the slab, masonry, flat roof, opening allowances and five finishing trades with wall painting. It remains a concept estimate: taxes, preliminaries, foundations, reinforcement, drainage, services, waterproofing, demolition/rework, fees and programme effects are excluded. Product systems, preparation, thicknesses for finishing layers, construction details and regulatory performance require project-specific selections. The specification is a draft technical schedule for development alongside a contract. The demonstration does not claim that homespec's building guideline or regulatory checks have been run.
 
@@ -106,7 +140,9 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 
 | Path | Purpose |
 |---|---|
-| `housesync/schema.py` | Validated house parameters and unit rates |
+| `housesync/schema.py` | Validated house parameters, legacy prices and rate overrides |
+| `rates/rates_aud.csv` | Editable, versioned default rate library with source/date per BOQ item |
+| `housesync/rates.py` | CSV validation, library fingerprint and snapshot data |
 | `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
 | `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
 | `housesync/changes.py` | Described A-to-B revision comparison and change-cost report exports |
@@ -117,7 +153,7 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py -q
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py tests/test_rate_library.py tests/test_housesync_rate_design.py tests/test_housesync_rate_workflow.py tests/test_housesync_rate_provenance.py -q
 .venv\Scripts\ruff.exe check .
 Get-ChildItem housesync/static -Filter *.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
 node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor.test.mjs
@@ -125,7 +161,11 @@ node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor
 
 Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Linux/macOS use build123d 0.11, preserving the advanced geometry API and Python 3.13 compatibility used by the upstream test suite.
 
-The AUD BOQ expansion was verified with **127 House Sync Python tests and 32 JavaScript tests passing**, repository-wide Ruff, syntax checks for every browser JavaScript file, compiled fractional-dimension/opening regression cases, rendered PDF reviews and spreadsheet recalculation. The wider non-Blender suite has 20 existing Windows issues, all reproduced on unchanged `main`: seven symlink privilege failures, twelve advanced geometry/profile/roof failures and one retained-camera source hash mismatch. These are not counted as passes. Blender integration was not run locally.
+Verification for the rate library passed **196 House Sync Python tests**, **38 JavaScript tests**, repository-wide Ruff and syntax checks for every browser JavaScript file. A design saved by the preceding AUD version retained its AUD 54,669.22 subtotal and reported zero changes after all library prices were increased by 20%. The variation order PDF was rendered and the Excel BOQ recalculated.
+
+In a live Chrome session, overriding the slab rate from AUD 95 to 105 increased the estimate by AUD 800. Resetting the override restored the original subtotal. Updating the CSV slab rate to AUD 115 produced an AUD 1,600 library effect and a zero override effect.
+
+The wider non-Blender tests have 20 existing Windows failures or errors matching the unchanged baseline by test ID. Seven involve symlink privileges, twelve involve advanced geometry and one involves a retained-camera source hash. Blender integration was not run locally.
 
 The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
 
@@ -133,7 +173,7 @@ The upstream library_room build was verified on this PC with **51 checks passed,
 
 The edited-shell audit fixture compiled with zero clashes and 28 passing upstream checks. Its glazing ratio was 5.6% against the upstream project's 10% guideline, which remains an unresolved concept finding. It is not represented as a statutory requirement. The optional Blender dressed-scene audit was attempted but could not run because Blender is unavailable; furniture/circulation and building-code compliance are not certified by the editor's geometry checks.
 
-The desktop browser automation connection was unavailable during this verification. Pure plan editing tests, API/build/export tests and visual checks of the generated drawing/specification PDFs provide the recorded verification; a live pointer interaction review remains to be completed on the PC.
+The original plan editing audit covered plan logic, API/build/export tests and visual checks of the generated drawing and specification PDFs. It did not include a live pointer interaction review.
 
 ## Licence
 

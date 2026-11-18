@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from housesync import server
+from housesync.rates import BOQ_CODES, DEFAULT_LIBRARY_PATH
 from housesync.schema import HouseSettings
 
 
@@ -19,22 +20,24 @@ from housesync.schema import HouseSettings
 def fake_exports(monkeypatch):
     state = {"source": "version-one", "builds": [], "exports": [], "fail_export": False}
 
-    def revision(settings):
-        encoded = settings.model_dump_json() + state["source"]
+    def revision(settings, library):
+        encoded = settings.model_dump_json() + state["source"] + library.sha256
         return hashlib.sha256(encoded.encode()).hexdigest()[:12]
 
-    def build(settings, output):
+    def build(settings, output, library):
         state["builds"].append(settings.model_dump(mode="json"))
         (output / "house.ifc").write_text("IFC example: " + settings.paint_colour, encoding="utf-8")
         area = settings.length_mm * settings.width_mm / 1e6
-        rows = [
-            {"code": "FLOOR", "description": "Floor slab", "quantity": area, "unit": "m2", "rate": settings.rates.floor_m2,
-             "amount": round(area * settings.rates.floor_m2, 2), "element_ids": ["S0"]},
-            {"code": "PAINT", "description": f"Paint {settings.paint_colour} {settings.paint_hex}", "quantity": 200, "unit": "m2",
-             "rate": settings.rates.paint_m2, "amount": round(200 * settings.rates.paint_m2, 2), "element_ids": ["W1"]},
-        ]
+        rows = []
+        for code, quantity, description, element in [
+            ("FLOOR", area, "Floor slab", "S0"),
+            ("PAINT", 200, f"Paint {settings.paint_colour} {settings.paint_hex}", "W1"),
+        ]:
+            rate = settings.rate_overrides.get(code, library.rows[code]["rate"])
+            rows.append({"code": code, "description": description, "quantity": quantity, "unit": "m2",
+                         "rate": rate, "amount": round(quantity * rate, 2), "element_ids": [element]})
         return {
-            "settings": settings.model_dump(mode="json"), "revision": revision(settings),
+            "settings": settings.model_dump(mode="json"), "revision": revision(settings, library), "rate_library": library.snapshot(),
             "files": {"ifc": "house.ifc"}, "mesh": {"objects": []},
             "boq": rows, "totals": {"currency": settings.currency, "subtotal": sum(row["amount"] for row in rows)},
         }
@@ -173,6 +176,27 @@ def test_http_build_and_download_share_published_revision(http_application):
     assert json.loads(body)["revision"] == result["revision"]
 
 
+def test_http_rates_and_invalid_library_leave_issued_revision_available(http_application, tmp_path):
+    application, request, _ = http_application
+    status, body, _ = request("POST", "/api/build", {})
+    assert status == 200
+    issued = json.loads(body)
+    status, body, headers = request("GET", "/api/rates")
+    assert status == 200
+    assert json.loads(body) == issued["rate_library"]
+    assert headers["Cache-Control"] == "no-store"
+    path = tmp_path / "rates.csv"
+    path.write_bytes(DEFAULT_LIBRARY_PATH.read_bytes().replace(b"code,description,", b"code,missing,"))
+    application.rate_library_path = path
+    for method, route, payload in [("GET", "/api/rates", None), ("POST", "/api/build", {})]:
+        status, body, _ = request(method, route, payload)
+        assert status == 422
+        assert "line 1" in json.loads(body)["error"].lower()
+    restarted = server.Application(application.output_root, rate_library_path=path)
+    assert restarted.state()["revision"] == issued["revision"]
+    assert len(restarted.revisions()) == 1
+
+
 def test_http_rejects_invalid_settings_without_creating_a_revision(http_application, fake_exports):
     application, request, _ = http_application
     status, body, _ = request("POST", "/api/build", {"length_mm": 1, "paint_hex": "invalid"})
@@ -306,7 +330,7 @@ def test_currency_change_keeps_new_design_but_does_not_invent_an_exchange_rate(h
     _, request, _ = http_application
     _, body, _ = request("POST", "/api/build", {})
     before = json.loads(body)
-    status, body, _ = request("POST", "/api/build", {"currency": "MYR"})
+    status, body, _ = request("POST", "/api/build", {"currency": "MYR", "rate_overrides": dict.fromkeys(BOQ_CODES, 100)})
     after = json.loads(body)
     assert status == 200
     assert after["last_change"] is None

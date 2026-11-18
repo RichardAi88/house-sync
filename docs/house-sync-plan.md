@@ -15,9 +15,10 @@ The demonstration is a single rectangular room shell, as a concept house. Defaul
 | Roof | 200 mm flat roof with 300 mm overhang beyond the external wall faces |
 | Doors | Editable hosted openings; default D1 is centred on the south wall, 1,000 x 2,100 mm |
 | Windows | Editable hosted openings; defaults N1/N2 are centred north/east, 1,500 x 1,200 mm with 900 mm sill |
-| Editable settings | House dimensions, finish, paint coats, ten unit rates, per-item wastage, currency and rate source/date; stable-ID doors/windows with host, start, width, height and sill |
+| Editable settings | House dimensions, finish, paint coats, per-item wastage, currency, rate overrides and source/date; stable-ID doors/windows with host, start, width, height and sill |
 | Plan and browser model | Direct constrained plan edits, snapping, undo/redo and draft review; compiled 3D view |
-| BOQ | Eleven items exported to Excel and CSV, with net quantities, wastage and gross priced quantities |
+| BOQ | Eleven items exported to Excel and CSV, with net quantities, wastage, gross priced quantities and row-level rate provenance |
+| Rate library | Editable `rates/rates_aud.csv`, one source/date per BOQ code, library snapshot SHA-256, optional project overrides |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
 | Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |
@@ -27,10 +28,10 @@ All exported documents are snapshots of the selected design revision. Editing an
 ## Implemented core
 
 - Build the demonstration through homespec's geometry compiler and extract its final model quantities.
-- Deduct the modelled openings, count parent door/window products once, and apply editable illustrative rates.
+- Deduct the modelled openings, count parent door/window products once, and resolve each effective rate from a validated library row or an explicit project override.
 - Use stable element IDs across model data, BOQ references, and drawings.
 - Generate all three document families from the same compiled result.
-- Include a revision based on settings and application source files.
+- Include a revision based on settings, application source files and the recorded rate-library basis.
 - Keep local generated revisions in the ignored output directory while code, tests, plans, and decisions are tracked in Git.
 
 The local server and browser interface integrate these components. The README contains the current startup and verification instructions.
@@ -51,11 +52,13 @@ The local server and browser interface integrate these components. The README co
 
 The paint quantity applies an editable coat multiplier, default 2, to the measured net paint area. Each BOQ item records net quantity, wastage percentage and gross quantity; pricing uses the gross quantity. Default wastage is 10% for floor finish/skirting, 5% for ceiling/internal plaster/external render, and 0% for the existing items, including paint. Coat count does not alter the measured wall area or geometry.
 
-New designs default to AUD. The ten rate inputs cover slab, wall volume, roof, paint per coat, a shared allowance per door/window, floor finish, ceiling, skirting, internal plaster/render and external render. They are **illustrative AUD rates, not a tender estimate** and do not represent supplier quotes. The editable rate source/date fields record provenance; the demonstration date is 2026-11-17. Taxes, preliminaries, foundations, services and unmodelled work remain excluded.
+New designs default to AUD. `rates/rates_aud.csv` supplies one rate for each of the eleven BOQ codes, with independent door and window rows. The columns are `code`, `description`, `unit`, `rate`, `currency`, `source`, `effective_date` and `notes`. The shipped rows are **illustrative AUD rates, not a tender estimate**, dated 2026-11-17; they do not represent supplier quotes. Each modern design may override selected codes, retaining override source/date separately. Blank overrides follow the library; explicit zero is a zero-cost override. Taxes, preliminaries, foundations, services and unmodelled work remain excluded.
 
 For the default geometry, check quantities are 80.000 m2 clear floor/finish/ceiling area, 20.940 m3 net wall volume, 35.000 m skirting, 102.300 m2 internal plaster/render, 107.100 m2 external render, 209.400 m2 measured paint area (418.800 m2 at two coats), 99.000 m2 roof area, one door and two windows. At default wastage and rates, the subtotal is **AUD 53,330.22**. Increasing the length to 12 m gives **AUD 61,640.22**, a difference of **AUD 8,310.00**; the README contains the itemised worked example.
 
-Older design inputs load omitted settings with defaults while retaining explicitly saved rates and currency. Missing defaults do not create settings-only variations. Saved revision BOQs are never repriced or rewritten; comparisons still use their recorded amounts and reject different currencies. Coat or wastage edits affect the quantity component, while rate edits affect the rate component of the reconciled A-to-B comparison.
+Older designs retain explicitly saved rates as overrides and retain their currency. Pre-finishes designs may lack new item prices: when the current library has another currency, supply all missing rates or select a matching-currency library before building. Saved revision BOQs are never repriced or rewritten; comparisons still use their recorded amounts and reject different currencies. Coat or wastage edits affect the quantity component. With a known library basis in both revisions, rate effects are attributed first to library changes holding old overrides, then to override changes at the new library and quantity. Historical missing basis remains unknown.
+
+Edit the CSV, use **Refresh rate library** on the **Rates** tab, review values and per-row sources/dates, then explicitly update the house and documents. Optional per-item overrides and **Use library** controls manage project exceptions. A custom file can be selected with `--rates`. Generated revisions preserve the full SHA-256 of the raw library bytes and a detached copy of its rows, plus effective rate provenance for the coordinated exports; merely changing the CSV does not rewrite saved revisions.
 
 ## Verification completed during setup
 
@@ -74,7 +77,8 @@ The DOCX package and contents passed structural tests. Visual DOCX rendering was
 | Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
 | Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
 | Implemented: finishing trades and AUD allowances | Five finishing trades, editable coats/wastage, AUD defaults and rate source/date metadata |
-| Project rates | Supplier quotation integration, separate door/window product rates, location context and taxes remain |
+| Implemented: CSV rate library | Editable eleven-item CSV, per-row source/date, SHA-256 snapshots, per-item overrides/reset and rate attribution |
+| Project rates | Supplier quotation integration, product selection, location context and taxes remain |
 | Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
 | Further CAD editing | Arbitrary wall segments, reliable junctions, partitions and multiple rooms |
 | Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |

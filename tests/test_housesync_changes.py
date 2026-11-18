@@ -20,12 +20,16 @@ def money(value):
 def repriced(result, **updates):
     revised = deepcopy(result)
     revised["revision"] = "b" * 12
-    revised["settings"]["rates"].update(updates)
     keys = {"FLOOR": "floor_m2", "WALL": "wall_m3", "ROOF": "roof_m2", "PAINT": "paint_m2", "DOOR": "opening_each", "WINDOW": "opening_each",
             "FLOOR_FINISH": "floor_finish_m2", "CEILING": "ceiling_m2", "SKIRTING": "skirting_m",
             "INTERNAL_PLASTER": "internal_plaster_m2", "EXTERNAL_RENDER": "external_render_m2"}
     for item in revised["boq"]:
-        item["rate"] = revised["settings"]["rates"][keys[item["code"]]]
+        if keys[item["code"]] in updates:
+            item["rate"] = updates[keys[item["code"]]]
+            revised["settings"].setdefault("rate_overrides", {})[item["code"]] = item["rate"]
+            item["rate_origin"] = "override"
+            item["rate_source"] = revised["settings"]["rate_source"]
+            item["rate_effective_date"] = revised["settings"]["rate_date"]
         item["amount"] = money(Decimal(str(item["quantity"])) * Decimal(str(item["rate"])))
     revised["totals"]["subtotal"] = money(sum(Decimal(str(item["amount"])) for item in revised["boq"]))
     return revised
@@ -46,6 +50,7 @@ def test_real_house_length_change_and_independent_cost_reconciliation(built_pair
     assert result["totals"] == {
         "before": 53330.22, "after": 61640.22, "additions": 8310.0, "omissions": 0.0,
         "net_change": 8310.0, "quantity_effect": 8310.0, "rate_effect": 0.0, "rounding_effect": 0.0,
+        "library_rate_effect": 0.0, "override_rate_effect": 0.0, "unattributed_rate_effect": 0.0,
     }
     assert {item["code"]: item["cost_delta"] for item in result["items"]} == {
         "FLOOR": 1520, "WALL": 912, "ROOF": 2610, "PAINT": 432, "FLOOR_FINISH": 1144,
@@ -364,7 +369,7 @@ def test_new_trade_rate_only_and_mixed_wastage_rate_split(built_pair):
     before = built_pair[0]
     rate_only = repriced(before, floor_finish_m2=75)
     comparison = compare_revisions(before, rate_only)
-    assert [change["field"] for change in comparison["setting_changes"]] == ["rates.floor_finish_m2"]
+    assert [change["field"] for change in comparison["setting_changes"]] == ["rate_overrides.FLOOR_FINISH"]
     item = comparison["items"][0]
     assert item["code"] == "FLOOR_FINISH"
     assert (item["before_quantity"], item["after_quantity"]) == (88, 88)
@@ -393,10 +398,13 @@ def test_legacy_missing_fields_are_defaults_without_repricing_saved_snapshot(bui
     from housesync.schema import HouseSettings
 
     historical = deepcopy(built_pair[0])
+    historical.pop("rate_library", None)
+    historical["settings"].pop("rate_overrides", None)
     old_rates = {"FLOOR": 80, "WALL": 300, "ROOF": 120, "PAINT": 12, "DOOR": 500, "WINDOW": 500}
     historical["boq"] = [row for row in historical["boq"] if row["code"] in old_rates]
     for row in historical["boq"]:
-        for field in ("net_quantity", "gross_quantity", "measured_quantity", "wastage_percent", "paint_coats"):
+        for field in ("net_quantity", "gross_quantity", "measured_quantity", "wastage_percent", "paint_coats", "rate_origin", "rate_source",
+                      "rate_effective_date", "library_rate", "library_currency"):
             row.pop(field, None)
         row["rate"] = old_rates[row["code"]]
         if row["code"] == "PAINT":

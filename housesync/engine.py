@@ -22,6 +22,7 @@ from homespec.export import export_ifc, export_plan, export_schedules
 from homespec.geometry import planar_face_meshes, read_obj, read_step
 from homespec.ir import IRDocument
 
+from .rates import BOQ_CODES, RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
 ENGINE_VERSION = "house-sync-1"
@@ -51,7 +52,21 @@ def _money(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _revision(settings: HouseSettings) -> str:
+def _pricing_library(settings: HouseSettings, rate_library: RateLibrary | None = None) -> RateLibrary:
+    library = rate_library if rate_library is not None else load_rate_library()
+    if settings.currency != library.currency:
+        missing = BOQ_CODES.keys() - settings.rate_overrides.keys()
+        if missing:
+            raise RateLibraryError(
+                f"The rate library uses {library.currency}, but the design uses {settings.currency}. "
+                "No currency conversion is applied. Supply explicit rates in the design currency for: "
+                + ", ".join(sorted(missing))
+            )
+    return library
+
+
+def _revision(settings: HouseSettings, rate_library: RateLibrary | None = None) -> str:
+    library = _pricing_library(settings, rate_library)
     package = Path(__file__).resolve().parent
     repository = package.parent
     sources = {
@@ -65,9 +80,13 @@ def _revision(settings: HouseSettings) -> str:
         path = repository / name
         if path.is_file():
             sources[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    payload = {"engine": ENGINE_VERSION, "settings": settings.model_dump(mode="json"), "sources": sources}
+    payload = {"engine": ENGINE_VERSION, "settings": settings.model_dump(mode="json"),
+               "rate_library": library.snapshot(), "sources": sources}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+revision_for = _revision
 
 
 def _house(settings: HouseSettings) -> House:
@@ -197,7 +216,8 @@ def _quantities(ir: IRDocument) -> dict[str, float | int]:
     }
 
 
-def _boq(settings: HouseSettings, quantities: dict[str, Any]) -> list[dict[str, Any]]:
+def _boq(settings: HouseSettings, quantities: dict[str, Any], rate_library: RateLibrary | None = None) -> list[dict[str, Any]]:
+    library = _pricing_library(settings, rate_library)
     def opening_description(kind: str) -> tuple[str, list[str]]:
         openings = sorted((opening for opening in settings.openings if opening.kind == kind), key=lambda opening: opening.id)
         default_size = (1000, 2100) if kind == "door" else (1500, 1200)
@@ -215,31 +235,38 @@ def _boq(settings: HouseSettings, quantities: dict[str, Any]) -> list[dict[str, 
     door_description, door_ids = opening_description("door")
     window_description, window_ids = opening_description("window")
     definitions = [
-        ("FLOOR", "150 mm floor slab within clear internal room footprint", "floor_area_m2", "m2", "floor_m2", ["S0"]),
-        ("WALL", f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings", "wall_volume_m3", "m3", "wall_m3", ["W1", "W2", "W3", "W4"]),
-        ("ROOF", "200 mm flat roof including 300 mm overhang", "roof_area_m2", "m2", "roof_m2", ["R0"]),
+        ("FLOOR", "150 mm floor slab within clear internal room footprint", "floor_area_m2", ["S0"]),
+        ("WALL", f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings", "wall_volume_m3", ["W1", "W2", "W3", "W4"]),
+        ("ROOF", "200 mm flat roof including 300 mm overhang", "roof_area_m2", ["R0"]),
         ("PAINT", f"Wall paint - {settings.paint_colour} ({settings.paint_hex}); internal and external net faces; "
          f"measured net area {quantities['paint_area_m2']:g} m2 x {settings.paint_coats} coats",
-         "paint_area_m2", "m2", "paint_m2", ["W1", "W2", "W3", "W4"]),
-        ("DOOR", door_description, "door_count", "each", "opening_each", door_ids),
-        ("WINDOW", window_description, "window_count", "each", "opening_each", window_ids),
-        ("FLOOR_FINISH", "Floor finish to clear internal floor area", "floor_finish_area_m2", "m2", "floor_finish_m2", ["ROOM1", "S0"]),
-        ("CEILING", "Ceiling to clear internal room area", "ceiling_area_m2", "m2", "ceiling_m2", ["ROOM1", "R0"]),
-        ("SKIRTING", "Skirting to internal perimeter less door opening widths", "skirting_length_m", "m", "skirting_m", ["ROOM1", "W1", "W2", "W3", "W4", *door_ids]),
-        ("INTERNAL_PLASTER", "Internal plaster/render to net internal wall faces, deducting opening voids", "internal_plaster_area_m2", "m2", "internal_plaster_m2", ["W1", "W2", "W3", "W4"]),
-        ("EXTERNAL_RENDER", "External render to net external wall faces, deducting opening voids", "external_render_area_m2", "m2", "external_render_m2", ["W1", "W2", "W3", "W4"]),
+         "paint_area_m2", ["W1", "W2", "W3", "W4"]),
+        ("DOOR", door_description, "door_count", door_ids),
+        ("WINDOW", window_description, "window_count", window_ids),
+        ("FLOOR_FINISH", "Floor finish to clear internal floor area", "floor_finish_area_m2", ["ROOM1", "S0"]),
+        ("CEILING", "Ceiling to clear internal room area", "ceiling_area_m2", ["ROOM1", "R0"]),
+        ("SKIRTING", "Skirting to internal perimeter less door opening widths", "skirting_length_m", ["ROOM1", "W1", "W2", "W3", "W4", *door_ids]),
+        ("INTERNAL_PLASTER", "Internal plaster/render to net internal wall faces, deducting opening voids", "internal_plaster_area_m2", ["W1", "W2", "W3", "W4"]),
+        ("EXTERNAL_RENDER", "External render to net external wall faces, deducting opening voids", "external_render_area_m2", ["W1", "W2", "W3", "W4"]),
     ]
     rows = []
-    for code, description, quantity_key, unit, rate_key, element_ids in definitions:
+    for code, description, quantity_key, element_ids in definitions:
+        unit = BOQ_CODES[code][0]
         measured = quantities[quantity_key]
         net = Decimal(str(measured)) * (settings.paint_coats if code == "PAINT" else 1)
         wastage = getattr(settings.wastage, code.lower())
         quantity = float((net * (1 + Decimal(str(wastage)) / 100)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
-        rate = getattr(settings.rates, rate_key)
+        library_row = library.rows[code]
+        override = code in settings.rate_overrides
+        rate = settings.rate_overrides[code] if override else library_row["rate"]
         rows.append({
             "code": code, "description": description, "measured_quantity": measured,
             "net_quantity": float(net), "wastage_percent": wastage, "gross_quantity": quantity,
             "quantity": quantity, "unit": unit, "rate": rate,
+            "rate_origin": "override" if override else "library",
+            "rate_source": settings.rate_source if override else library_row["source"],
+            "rate_effective_date": settings.rate_date.isoformat() if override else library_row["effective_date"],
+            "library_rate": library_row["rate"], "library_currency": library.currency,
             "amount": _money(Decimal(str(quantity)) * Decimal(str(rate))), "element_ids": element_ids,
         })
         if code == "PAINT":
@@ -285,7 +312,7 @@ def _drawing(ir: IRDocument) -> dict[str, Any]:
     }
 
 
-def build_house(settings: HouseSettings, output_dir: Path) -> dict[str, Any]:
+def build_house(settings: HouseSettings, output_dir: Path, rate_library: RateLibrary | None = None) -> dict[str, Any]:
     """Compile a validated house and write exports into an isolated directory.
 
     The caller owns generation publication and document export. A lock
@@ -293,6 +320,7 @@ def build_house(settings: HouseSettings, output_dir: Path) -> dict[str, Any]:
     No Blender executable or downloaded texture assets are needed.
     """
     settings = HouseSettings.model_validate(settings.model_dump(mode="json"))
+    library = _pricing_library(settings, rate_library)
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     with _BUILD_LOCK:
@@ -310,9 +338,10 @@ def build_house(settings: HouseSettings, output_dir: Path) -> dict[str, Any]:
             for path in export_schedules(ir, str(output_dir / "upstream_schedules"))
         ]
         quantities = _quantities(ir)
-        boq = _boq(settings, quantities)
+        boq = _boq(settings, quantities, library)
         result = {
-            "settings": settings.model_dump(mode="json"), "revision": _revision(settings),
+            "settings": settings.model_dump(mode="json"), "revision": _revision(settings, library),
+            "rate_library": library.snapshot(),
             "quantities": quantities, "boq": boq,
             "totals": {"currency": settings.currency, "subtotal": _money(sum((Decimal(str(row["amount"])) for row in boq), Decimal(0)))},
             "files": files, "mesh": _mesh(ir), "drawing": _drawing(ir),

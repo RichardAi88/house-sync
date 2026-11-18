@@ -126,9 +126,10 @@ def test_legacy_settings_fill_new_defaults_and_preserve_explicit_old_prices():
               "currency": "SGD", "rates": {"floor_m2": 80, "wall_m3": 300, "roof_m2": 120, "paint_m2": 12, "opening_each": 500}}
     settings = HouseSettings.model_validate(legacy)
     assert settings.currency == "SGD"
-    assert settings.rates.floor_m2 == 80
-    assert settings.rates.paint_m2 == 12
-    assert settings.rates.floor_finish_m2 == 65
+    assert settings.rate_overrides["FLOOR"] == 80
+    assert settings.rate_overrides["PAINT"] == 12
+    assert settings.rate_overrides["DOOR"] == settings.rate_overrides["WINDOW"] == 500
+    assert "FLOOR_FINISH" not in settings.rate_overrides
     assert settings.paint_coats == 2
     assert settings.wastage.floor_finish == 10
     assert settings.wastage.ceiling == 5

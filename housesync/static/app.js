@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { PlanEditor } from './plan-editor.js';
-import { normalizeBoqSettings, WASTAGE_DEFAULTS } from './plan-core.js';
+import { normalizeBoqSettings, RATE_ITEMS, WASTAGE_DEFAULTS } from './plan-core.js';
 
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
@@ -16,15 +16,16 @@ let draftOpenings = legacyOpenings();
 const stableSettings = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const comparableSettings = settings => normalizeBoqSettings({ ...settings, openings: settings.openings ?? legacyOpenings() });
 const comparison = { revisions: [], result: null, busy: false, request: 0, refresh: 0, selection: 0 };
-const rateFields = { floor_m2: '#rate-floor', wall_m3: '#rate-wall', roof_m2: '#rate-roof', paint_m2: '#rate-paint', opening_each: '#rate-opening', floor_finish_m2: '#rate-floor-finish', ceiling_m2: '#rate-ceiling', skirting_m: '#rate-skirting', internal_plaster_m2: '#rate-internal-plaster', external_render_m2: '#rate-external-render' };
+const rateLibraryState = { current: null, error: '', request: 0, busy: false };
+const overrideFields = Object.fromEntries(RATE_ITEMS.map(([code]) => [code, '#override-' + code.toLowerCase().replaceAll('_', '-')]));
 const wastageFields = Object.fromEntries(Object.keys(WASTAGE_DEFAULTS).map(key => [key, '#wastage-' + key.replaceAll('_', '-')]));
-const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', ...Object.values(rateFields), ...Object.values(wastageFields)];
+const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', ...Object.values(overrideFields), ...Object.values(wastageFields)];
 const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
 const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rates: Object.fromEntries(Object.entries(rateFields).map(([key, id]) => [key, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings) };
+  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings) };
 }
 
 function fillForm(settings) {
@@ -35,8 +36,9 @@ function fillForm(settings) {
   }
   const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date };
   for (const [id, value] of Object.entries(map)) if (value !== undefined && value !== null) $(id).value = value;
-  for (const [key, id] of Object.entries(rateFields)) if (settings.rates?.[key] !== undefined) $(id).value = settings.rates[key];
+  for (const [code, id] of Object.entries(overrideFields)) $(id).value = Object.hasOwn(settings.rate_overrides, code) ? settings.rate_overrides[code] : '';
   for (const [key, id] of Object.entries(wastageFields)) $(id).value = settings.wastage[key];
+  updateOverrideHints();
   updateSwatches();
 }
 
@@ -51,10 +53,10 @@ function updateSwatches() {
 function setDirty(syncPlan = true) {
   const settings = settingsFromForm();
   if (syncPlan) planEditor?.setDraft(settings);
-  state.dirty = !state.result || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
+  state.dirty = !state.result || libraryDiffersFromRevision() || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
   $('#sync-status').textContent = state.dirty ? 'Draft plan · update to coordinate outputs' : 'Model & documents in sync';
   $('#sync-status').classList.toggle('pending', state.dirty);
-  $('#form-status').textContent = state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
+  $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
   setDownloadLinks();
   $('#comparison-draft-note').hidden = !state.dirty;
 }
@@ -75,6 +77,8 @@ function setBusy(value) {
   }
   setDownloadLinks();
   setComparisonDownloads();
+  updateOverrideHints();
+  renderRates();
 }
 
 function errorMessage(message) {
@@ -128,12 +132,16 @@ function resultReceived(result, populate = false) {
   $('#boq-total').textContent = money(total, currency);
   renderBOQ(result);
   renderSpec(result);
+  renderRates();
+  updateOverrideHints();
   const drawing = downloadURL(result.files?.drawings_svg);
   if (drawing) $('#drawing-preview').src = `${drawing}${drawing.includes('?') ? '&' : '?'}revision=${encodeURIComponent(result.revision)}`;
   renderModel(result.mesh);
   setDownloadLinks();
   $('#comparison-draft-note').hidden = true;
+  if (libraryDiffersFromRevision()) setDirty(false);
   void refreshComparisons(result, previousRevision, !populate);
+  void refreshRateLibrary();
 }
 
 function metric(selector, value, unit) {
@@ -144,16 +152,111 @@ function metric(selector, value, unit) {
   element.append(small);
 }
 
+function libraryDiffersFromRevision() {
+  return Boolean(rateLibraryState.current?.sha256 && state.result?.rate_library?.sha256 && rateLibraryState.current.sha256 !== state.result.rate_library.sha256);
+}
+
+function updateOverrideHints() {
+  const library = rateLibraryState.current || state.result?.rate_library;
+  const label = rateLibraryState.current ? 'Current library' : 'Saved library';
+  for (const [code, id] of Object.entries(overrideFields)) {
+    const input = $(id); const rate = library?.rows?.[code];
+    const override = input.value.trim() !== '';
+    input.placeholder = rate ? `${number(rate.rate)} ${rate.currency}/${rate.unit}` : 'Use library';
+    $('#library-rate-' + code.toLowerCase().replaceAll('_', '-')).textContent = rate ? `${override ? 'Override entered. ' : ''}${label}: ${number(rate.rate)} ${rate.currency}/${rate.unit}` : `${override ? 'Override entered. ' : ''}Library not loaded.`;
+    $('#reset-' + code.toLowerCase().replaceAll('_', '-')).disabled = state.busy || !override;
+  }
+  syncRatePanelOverrides();
+}
+
+function syncRatePanelOverrides() {
+  for (const [code, id] of Object.entries(overrideFields)) {
+    const key = code.toLowerCase().replaceAll('_', '-'); const input = $('#rates-override-' + key);
+    if (!input) continue;
+    const value = $(id).value;
+    if (input.value !== value) input.value = value;
+    input.disabled = state.busy;
+    const currency = $('#rates-override-currency-' + key);
+    if (currency) currency.textContent = `${$('#currency').value}/${RATE_ITEMS.find(([itemCode]) => itemCode === code)[2]}`;
+    const button = $('#rates-reset-' + key);
+    if (button) button.disabled = state.busy || value.trim() === '';
+  }
+}
+
+function setRateOverrideValue(code, value) {
+  if (state.busy || !Object.hasOwn(overrideFields, code)) return;
+  $(overrideFields[code]).value = value;
+  updateOverrideHints();
+  setDirty();
+}
+
+function resetRateOverride(code) {
+  setRateOverrideValue(code, '');
+}
+
+function renderRates() {
+  const library = rateLibraryState.current;
+  $('#rate-library-hash').textContent = library ? `${rateLibraryState.error ? 'Last successful read' : 'Current server library'}: ${library.sha256} (${library.currency})` : 'Current server library has not been loaded.';
+  $('#rate-library-saved').textContent = state.result?.rate_library?.sha256 ? `Saved revision ${state.result.revision} used library ${state.result.rate_library.sha256} (${state.result.rate_library.currency}). Its BOQ retains the captured rates.` : 'This saved revision has no captured rate library. Its recorded BOQ rates remain unchanged.';
+  $('#rate-library-difference').textContent = libraryDiffersFromRevision() ? 'The current library differs from the saved revision. Update house & documents to apply current library rates to items without overrides and save a new revision.' : 'Library values are read-only. Design override fields below edit the pending design; Update house & documents saves their effect.';
+  $('#rate-library-error').hidden = !rateLibraryState.error;
+  $('#rate-library-error').textContent = rateLibraryState.error;
+  $('#refresh-rate-library').disabled = rateLibraryState.busy || state.busy;
+  const body = $('#rate-library-body'); body.replaceChildren();
+  for (const row of Object.values(library?.rows || {})) {
+    const tr = document.createElement('tr');
+    for (const value of [row.code, row.description, row.unit, number(row.rate), row.currency, row.source, row.effective_date, row.notes]) {
+      const cell = document.createElement('td'); cell.textContent = String(value ?? ''); tr.append(cell);
+    }
+    if (Object.hasOwn(overrideFields, row.code)) {
+      const key = row.code.toLowerCase().replaceAll('_', '-');
+      const overrideCell = document.createElement('td'); overrideCell.className = 'library-override-cell';
+      const input = document.createElement('input'); input.id = 'rates-override-' + key; input.type = 'number'; input.min = '0'; input.max = '1000000'; input.step = 'any'; input.placeholder = 'Use library'; input.value = $(overrideFields[row.code]).value;
+      input.setAttribute('aria-label', row.code + ' design override rate'); input.addEventListener('input', () => setRateOverrideValue(row.code, input.value));
+      const currency = document.createElement('span'); currency.id = 'rates-override-currency-' + key; currency.className = 'library-override-currency';
+      overrideCell.append(input, currency); tr.append(overrideCell);
+      const resetCell = document.createElement('td');
+      const button = document.createElement('button'); button.id = 'rates-reset-' + key; button.type = 'button'; button.className = 'reset-rate'; button.textContent = 'Use library'; button.setAttribute('aria-label', 'Reset ' + row.code + ' to library'); button.addEventListener('click', () => resetRateOverride(row.code)); resetCell.append(button); tr.append(resetCell);
+    }
+    body.append(tr);
+  }
+  syncRatePanelOverrides();
+}
+
+async function refreshRateLibrary() {
+  const request = ++rateLibraryState.request;
+  rateLibraryState.busy = true; renderRates();
+  try {
+    const library = await fetchJSON('/api/rates');
+    if (!library || typeof library.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(library.sha256) || !library.rows || typeof library.rows !== 'object' || Array.isArray(library.rows)) throw new Error('The server returned an incomplete rate library.');
+    if (request !== rateLibraryState.request) return;
+    rateLibraryState.current = library; rateLibraryState.error = '';
+  } catch (error) {
+    if (request !== rateLibraryState.request) return;
+    rateLibraryState.error = `Rate library could not be refreshed: ${error.message}`;
+  } finally {
+    if (request === rateLibraryState.request) {
+      rateLibraryState.busy = false; renderRates(); updateOverrideHints();
+      if (state.result) setDirty(false);
+    }
+  }
+}
+
+function rateBasis(row, result) {
+  const origin = row.rate_origin || (Object.hasOwn(comparableSettings(result.settings).rate_overrides, row.code) ? 'override' : result.rate_library ? 'library' : 'legacy');
+  return [origin === 'override' ? 'Override' : origin === 'library' ? 'Library' : 'Saved legacy rate', row.rate_source, row.rate_effective_date].filter(Boolean).join(' | ');
+}
+
 function renderBOQ(result) {
   const body = $('#boq-body');
   body.replaceChildren();
   for (const row of result.boq || []) {
     const tr = document.createElement('tr');
-    const values = [row.code, row.description, number(row.net_quantity ?? row.quantity, 3), `${number(row.wastage_percent ?? 0)}%`, number(row.gross_quantity ?? row.quantity, 3), row.unit, number(row.rate), number(row.amount)];
+    const values = [row.code, row.description, number(row.net_quantity ?? row.quantity, 3), `${number(row.wastage_percent ?? 0)}%`, number(row.gross_quantity ?? row.quantity, 3), row.unit, number(row.rate), rateBasis(row, result), number(row.amount)];
     for (const value of values) { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); }
     body.append(tr);
   }
-  $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', `Rate source: ${result.settings.rate_source ?? 'Not recorded'}. Date: ${result.settings.rate_date ?? 'Not recorded'}. illustrative AUD rates, not a tender estimate.`].join(' ');
+  $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', 'Rate basis identifies each saved item as library or design override, with its recorded source and effective date. The subtotal covers only modelled scope.'].join(' ');
 }
 
 function renderSpec(result) {
@@ -181,7 +284,7 @@ function renderSpec(result) {
   for (const row of result.boq || []) if (trades.has(row.code)) {
     section(row.code.replaceAll('_', ' ').toLowerCase(), [row.description, `Net ${number(row.net_quantity, 3)} ${row.unit}; wastage ${number(row.wastage_percent)}%; gross ${number(row.gross_quantity, 3)} ${row.unit}.`]);
   }
-  section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use editable illustrative allowances in ${settings.currency}; they do not represent a complete tender estimate. All issued files should retain design revision ${result.revision}.`]);
+  section('04 · Quantities & pricing', [result.measurement_rule || 'Quantities are derived from the compiled house geometry. Paint excludes openings and reveals.', `BOQ values use saved unit rates in ${settings.currency}, with each item recording its rate source and effective date. The subtotal covers only modelled scope. All issued files should retain design revision ${result.revision}.`]);
 }
 
 function signedMoney(value, currency) {
@@ -337,9 +440,15 @@ function renderComparison(result) {
   $('#comparison-status').textContent = result.has_changes ? 'Change captured. The report describes the selected saved revisions.' : 'Comparison complete. No changes between these saved revisions.';
   $('#comparison-no-changes').hidden = Boolean(result.has_changes);
   $('#change-ready-dot').hidden = !result.has_changes;
-  const summaries = Array.isArray(result.summary) && result.summary.length ? result.summary : (result.setting_changes || []).map(item => item.description || `${item.label}: ${item.before} \u2192 ${item.after}`);
+  const summaries = Array.isArray(result.library_changes) ? (result.setting_changes || []).map(item => item.description || `${item.label}: ${item.before} \u2192 ${item.after}`) : Array.isArray(result.summary) && result.summary.length ? result.summary : (result.setting_changes || []).map(item => item.description || `${item.label}: ${item.before} \u2192 ${item.after}`);
   const list = $('#comparison-summary'); list.replaceChildren();
   for (const text of summaries) { const item = document.createElement('li'); item.textContent = String(text); list.append(item); }
+  const libraryChanges = Array.isArray(result.library_changes) ? result.library_changes : [];
+  $('#comparison-library-section').hidden = !libraryChanges.length;
+  const libraryList = $('#comparison-library-summary'); libraryList.replaceChildren();
+  for (const change of libraryChanges) { const item = document.createElement('li'); item.textContent = change.description; libraryList.append(item); }
+  if (libraryChanges.length && !summaries.length) { $('#comparison-no-changes').hidden = false; $('#comparison-no-changes').textContent = 'No design or override settings changed. The library changes are recorded separately below.'; }
+  else $('#comparison-no-changes').textContent = 'No design, specification or BOQ changes between these revisions.';
   const body = $('#comparison-items'); body.replaceChildren();
   for (const item of result.items || []) {
     const row = document.createElement('tr');
@@ -352,6 +461,14 @@ function renderComparison(result) {
       const after = document.createElement('p'); after.className = 'change-description-after'; after.textContent = `B: ${item.after_description}`; description.append(after);
     }
     if (item.element_ids?.length) { const ids = document.createElement('small'); ids.textContent = `Elements: ${item.element_ids.join(', ')}`; description.append(ids); }
+    if (item.before_rate_origin || item.after_rate_origin) {
+      const provenance = document.createElement('small');
+      provenance.textContent = `Rate A: ${item.before_rate_origin || 'legacy'} | ${item.before_rate_source || 'source not recorded'} | ${item.before_rate_effective_date || 'date not recorded'}. Rate B: ${item.after_rate_origin || 'legacy'} | ${item.after_rate_source || 'source not recorded'} | ${item.after_rate_effective_date || 'date not recorded'}.`;
+      description.append(provenance);
+    }
+    if (item.library_rate_effect !== undefined || item.override_rate_effect !== undefined) {
+      const effects = document.createElement('small'); effects.textContent = `Library rate effect ${signedMoney(item.library_rate_effect, currency)}; override rate effect ${signedMoney(item.override_rate_effect, currency)}.`; description.append(effects);
+    }
     row.append(description);
     const formatQuantity = value => value === null || value === undefined ? '\u2014' : number(value, 3);
     const formatRate = value => value === null || value === undefined ? '\u2014' : number(value);
@@ -366,6 +483,7 @@ function renderComparison(result) {
   $('#comparison-table-total').textContent = signedMoney(totals.net_change, currency);
   $('#comparison-table-total').className = deltaClass(totals.net_change);
   for (const [id, key] of [['#compare-quantity-effect', 'quantity_effect'], ['#compare-rate-effect', 'rate_effect'], ['#compare-rounding-effect', 'rounding_effect']]) $(id).textContent = signedMoney(totals[key], currency);
+  for (const [id, key] of [['#compare-library-effect', 'library_rate_effect'], ['#compare-override-effect', 'override_rate_effect'], ['#compare-unattributed-effect', 'unattributed_rate_effect']]) $(id).textContent = signedMoney(totals[key], currency);
   const notes = $('#comparison-notes'); notes.replaceChildren();
   const noteTexts = Array.isArray(result.notes) ? result.notes : result.notes ? [result.notes] : [];
   for (const text of noteTexts) { const item = document.createElement('li'); item.textContent = String(text); notes.append(item); }
@@ -506,7 +624,10 @@ $('#compare-before').addEventListener('change', selectedComparisonChanged);
 $('#compare-after').addEventListener('change', selectedComparisonChanged);
 $('#compare-button').addEventListener('click', compareSavedRevisions);
 document.querySelectorAll('[data-change-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
-fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); setDirty(); }));
+fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); syncRatePanelOverrides(); setDirty(); }));
+Object.values(overrideFields).forEach(id => $(id).addEventListener('input', updateOverrideHints));
+document.querySelectorAll('[data-reset-override]').forEach(button => button.addEventListener('click', () => resetRateOverride(button.dataset.resetOverride)));
+$('#refresh-rate-library').addEventListener('click', refreshRateLibrary);
 document.querySelectorAll('.paint-swatch').forEach(button => button.addEventListener('click', () => { $('#paint-hex').value = button.dataset.colour; $('#paint-colour').value = button.dataset.name; updateSwatches(); setDirty(); }));
 function showView(name) {
   document.querySelectorAll('.view-tab').forEach(tab => { const active = tab.dataset.panel === name; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
