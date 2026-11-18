@@ -13,7 +13,7 @@ import threading
 import traceback
 import uuid
 import webbrowser
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -22,15 +22,45 @@ from pydantic import ValidationError
 
 from .changes import compare_revisions, export_change_report
 from .documents import export_documents
-from .engine import _revision as revision_for
-from .engine import build_house
+from .engine import build_house, revision_for
+from .layout import derive_layout
+from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
+from .quote_documents import export_quote_documents
+from .quotes import build_variation_quote
+from .rates import RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
-MAX_BODY = 32768
+MAX_BODY = 4_194_304
 REVISION = re.compile(r"^[0-9a-f]{12}$")
 COMPARISON = re.compile(r"^[0-9a-f]{12}_[0-9a-f]{12}_[0-9a-f]{12}$")
+COMPARISON_CONTRACT = "house-sync-client-quotes-1"
+COMPARISON_SOURCES = ("changes.py", "schema.py", "rates.py", "quotes.py", "quote_documents.py", "server.py")
+
+
+def _quote_issue_date() -> date:
+    """Freeze the UTC calendar date when a comparison is first prepared."""
+    return datetime.now(UTC).date()
+
+
+def _comparison_source_fingerprint() -> str:
+    source = [COMPARISON_CONTRACT.encode("ascii")]
+    for name in COMPARISON_SOURCES:
+        source.extend((name.encode("ascii"), Path(__file__).with_name(name).read_bytes()))
+    return hashlib.sha256(b"\0".join(source)).hexdigest()
+
+
+def _current_comparison_contract(comparison: dict) -> bool:
+    """A historical report without quote artefacts is left intact on upgrade."""
+    if comparison.get("report_contract") != COMPARISON_CONTRACT or "quote" not in comparison:
+        return False
+    quote_snapshot = comparison["quote"]
+    quote_files = {"client_quote_pdf", "internal_breakdown_pdf"}
+    if comparison.get("currency") != "AUD":
+        return quote_snapshot is None and not quote_files.intersection(comparison.get("files", {}))
+    return (isinstance(quote_snapshot, dict) and isinstance(quote_snapshot.get("public"), dict)
+            and isinstance(quote_snapshot.get("internal"), dict) and quote_files.issubset(comparison.get("files", {})))
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
@@ -52,8 +82,9 @@ def atomic_json(path: Path, data: dict) -> None:
 
 
 class Application:
-    def __init__(self, output_root: Path):
+    def __init__(self, output_root: Path, rate_library_path: Path | None = None):
         self.output_root = output_root.resolve()
+        self.rate_library_path = rate_library_path
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.latest: dict | None = None
@@ -83,20 +114,38 @@ class Application:
         with self.lock:
             before = self.read_revision(before_revision)
             after = self.read_revision(after_revision)
-            source = Path(__file__).with_name("changes.py").read_bytes()
-            version = hashlib.sha256(source).hexdigest()[:12]
-            comparison_id = f"{before_revision}_{after_revision}_{version}"
-            destination = self.changes_root / comparison_id
-            if (destination / "comparison.json").is_file():
-                return json.loads((destination / "comparison.json").read_text(encoding="utf-8"))
+            fingerprint = _comparison_source_fingerprint()
+            version, migration = fingerprint[:12], 0
+            while True:
+                comparison_id = f"{before_revision}_{after_revision}_{version}"
+                destination = self.changes_root / comparison_id
+                record = destination / "comparison.json"
+                if not destination.exists():
+                    break
+                if record.is_file():
+                    cached = json.loads(record.read_text(encoding="utf-8"))
+                    if _current_comparison_contract(cached):
+                        return cached
+                # Even an older/incomplete cache at the current key must not
+                # be overwritten. Publish a new, deterministic upgrade key.
+                migration += 1
+                version = hashlib.sha256(f"{fingerprint}\0quote-upgrade-{migration}".encode("ascii")).hexdigest()[:12]
             comparison = compare_revisions(before, after)
             comparison["comparison_id"] = comparison_id
             comparison["created_at"] = datetime.now(UTC).isoformat()
+            comparison["report_contract"] = COMPARISON_CONTRACT
+            comparison["source_fingerprint"] = fingerprint
+            comparison["quote"] = None
+            if comparison["currency"] == "AUD":
+                comparison["quote"] = build_variation_quote(before, after, comparison, _quote_issue_date())
+                comparison["quote_date_basis"] = "UTC calendar date of first preparation"
             self.changes_root.mkdir(parents=True, exist_ok=True)
             temporary = self.changes_root / ("building-" + uuid.uuid4().hex)
             temporary.mkdir()
             try:
                 files = export_change_report(comparison, temporary)
+                if comparison["quote"] is not None:
+                    files.update(export_quote_documents(comparison, temporary))
                 comparison["files"] = {
                     key: f"/changes/{comparison_id}/" + quote(name, safe="/") for key, name in files.items()
                 }
@@ -134,10 +183,11 @@ class Application:
                     enriched["last_change"] = self.compare(transition["before_revision"], result["revision"])
         return enriched
 
-    def build(self, settings: HouseSettings) -> dict:
+    def build(self, settings: HouseSettings, *, rate_library: RateLibrary | None = None) -> dict:
         with self.lock:
+            library = rate_library if rate_library is not None else load_rate_library(self.rate_library_path)
             previous = self._previous()
-            revision = revision_for(settings)
+            revision = revision_for(settings, library)
             destination = self.output_root / revision
             if (destination / "result.json").is_file():
                 self.latest = json.loads((destination / "result.json").read_text(encoding="utf-8"))
@@ -147,14 +197,13 @@ class Application:
             temporary = self.output_root / ("building-" + uuid.uuid4().hex)
             temporary.mkdir()
             try:
-                result = build_house(settings, temporary)
+                result = build_house(settings, temporary, library)
+                if result["revision"] != revision or not REVISION.fullmatch(revision):
+                    raise ValueError("Build inputs changed during generation. Please retry the update.")
                 result["files"].update(export_documents(result, temporary))
                 result["files"]["settings_json"] = "settings.json"
                 atomic_json(temporary / "settings.json", settings.model_dump(mode="json"))
                 result["created_at"] = datetime.now(UTC).isoformat()
-                revision = result["revision"]
-                if not REVISION.fullmatch(revision):
-                    raise ValueError("Engine returned an invalid revision")
                 result["files"] = {
                     key: "/files/" + revision + "/" + quote(value.replace("\\", "/"), safe="/")
                     for key, value in result["files"].items()
@@ -181,22 +230,22 @@ class Application:
                 raise
 
     def state(self) -> dict:
-        if self.latest:
-            return self.latest
-        latest_path = self.output_root / "latest.json"
-        if latest_path.exists():
-            try:
-                revision = json.loads(latest_path.read_text(encoding="utf-8"))["revision"]
-                if REVISION.fullmatch(revision):
-                    saved = json.loads((self.output_root / revision / "result.json").read_text(encoding="utf-8"))
-                    settings = HouseSettings.model_validate(saved["settings"])
-                    if revision_for(settings) == revision:
-                        self.latest = saved
-                        return self.latest
-                    return self.build(settings)
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
-        return self.build(HouseSettings())
+        with self.lock:
+            if self.latest:
+                return self.latest
+            saved = self._previous()
+            if saved is None:
+                library = load_rate_library(self.rate_library_path)
+                return self.build(HouseSettings(currency=library.currency), rate_library=library)
+            # Reopening uses the issued pricing basis. Only an explicit build
+            # adopts edited CSV prices. Pre-library snapshots have no such basis.
+            if "rate_library" in saved:
+                issued = RateLibrary(**saved["rate_library"])
+                settings = HouseSettings.model_validate(saved["settings"])
+                if revision_for(settings, issued) != saved["revision"]:
+                    return self.build(settings, rate_library=issued)
+            self.latest = saved
+            return saved
 
     def revisions(self) -> list[dict]:
         records = []
@@ -233,19 +282,44 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             if not path.is_relative_to(root.resolve()) or not path.is_file():
                 self._json({"error": "File not found"}, 404)
                 return
-            content = path.read_bytes()
             mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             if path.suffix == ".js":
                 mime = "text/javascript"
+            self._content(path.read_bytes(), mime, path.name if attachment else None)
+
+        def _content(self, content: bytes, mime: str, filename: str | None = None) -> None:
             self.send_response(200)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(content)))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-cache")
-            if attachment:
-                self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            if filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.end_headers()
             self.wfile.write(content)
+
+        def _purchase_order(self, path: str) -> None:
+            parts = path.split("/")
+            if len(parts) != 4 or not REVISION.fullmatch(parts[2]):
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            revision, filename = parts[2:]
+            if filename == "all.zip":
+                saved = application.read_revision(revision)
+                self._content(purchase_orders_zip(saved), "application/zip", f"purchase-orders-{revision}.zip")
+                return
+            item = re.fullmatch(r"([A-Z][A-Z0-9_]*)\.pdf", filename)
+            if not item:
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            saved = application.read_revision(revision)
+            code = item.group(1)
+            try:
+                pdf = purchase_order_pdf(saved, code)
+            except UnknownPurchaseOrder:
+                self._json({"error": "Item not found in the saved bill of quantities"}, 404)
+                return
+            self._content(pdf, "application/pdf", f"PO-{revision}-{code}.pdf")
 
         def do_GET(self) -> None:
             if not self._allowed_host():
@@ -254,11 +328,15 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             path = unquote(urlsplit(self.path).path)
             try:
                 if path == "/api/health":
-                    self._json({"status": "ok", "application": "House Sync", "features": ["revision_comparison"]})
+                    self._json({"status": "ok", "application": "House Sync", "features": ["revision_comparison", "client_variation_quotes"]})
                 elif path == "/api/state":
                     self._json(application.envelope(application.state()))
+                elif path == "/api/rates":
+                    self._json(load_rate_library(application.rate_library_path).snapshot())
                 elif path == "/api/revisions":
                     self._json(application.revisions())
+                elif path.startswith("/purchase-orders/"):
+                    self._purchase_order(path)
                 elif path == "/api/compare":
                     query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                     if len(query.get("before", [])) != 1 or len(query.get("after", [])) != 1:
@@ -299,16 +377,35 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                 traceback.print_exc()
                 self._json({"error": f"Unable to load project: {exc}"}, 500)
 
+        def _reject_post(self, message: str, status: int) -> None:
+            # Drain bounded request bodies before closing. The expanded settings
+            # payload otherwise causes Windows to reset the socket before the
+            # client can read a rejection response. Never parse or build it.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if 0 < length <= MAX_BODY:
+                timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(1)
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+                finally:
+                    self.connection.settimeout(timeout)
+            self._json({"error": message}, status)
+
         def do_POST(self) -> None:
             if not self._allowed_host():
-                self._json({"error": "This application accepts localhost requests only."}, 403)
+                self._reject_post("This application accepts localhost requests only.", 403)
                 return
             origin = self.headers.get("Origin")
             if origin and origin not in {f"http://127.0.0.1:{self.server.server_port}", f"http://localhost:{self.server.server_port}"}:
-                self._json({"error": "Origin is not allowed"}, 403)
+                self._reject_post("Origin is not allowed", 403)
                 return
             route = urlsplit(self.path).path
-            if route not in {"/api/build", "/api/shutdown"}:
+            if route not in {"/api/build", "/api/layout", "/api/shutdown"}:
                 self._json({"error": "Route not found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -320,6 +417,12 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "Invalid request size"}, 413)
                     return
                 body = self.rfile.read(length)
+                if route == "/api/layout":
+                    draft = json.loads(body)
+                    if not isinstance(draft, dict):
+                        raise ValueError("Send a house design object for the plan preview.")
+                    self._json(derive_layout(draft, validate=False))
+                    return
                 if route == "/api/shutdown":
                     if json.loads(body) != {"application": "House Sync"}:
                         self._json({"error": "Identify the application to stop."}, 422)
@@ -332,6 +435,8 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             except ValidationError as exc:
                 messages = [".".join(map(str, item["loc"])) + ": " + item["msg"] for item in exc.errors()]
                 self._json({"error": "; ".join(messages)}, 422)
+            except RateLibraryError as exc:
+                self._json({"error": str(exc)}, 422)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, 400)
             except Exception as exc:
@@ -346,10 +451,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--open", action="store_true", help="Open the editor in the default browser")
     parser.add_argument("--output", type=Path, default=ROOT / "out" / "house-sync")
+    parser.add_argument("--rates", type=Path, help="Path to the project unit-rate CSV (default: rates/rates_aud.csv)")
     args = parser.parse_args()
     if not (ROOT / "node_modules" / "three" / "build" / "three.module.js").exists():
         parser.error("Browser dependencies are missing. Run npm ci in the project folder first.")
-    application = Application(args.output)
+    application = Application(args.output, rate_library_path=args.rates)
     server = LocalHTTPServer(("127.0.0.1", args.port), handler_for(application))
     url = f"http://127.0.0.1:{args.port}"
     print(f"House Sync is running at {url}\nRevision files: {args.output}\nPress Ctrl+C to stop.", flush=True)

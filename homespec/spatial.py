@@ -43,7 +43,7 @@ def analyze_opening(element: Element, ctx: AnalysisContext) -> Analysis:
         bottom, top = max(z0, level.elevation), min(z1, level.elevation + level.height)
         if top <= bottom:
             continue
-        polygon = Polygon(room.element.outline)
+        polygon = Polygon(room.element.outline, getattr(room.element, "holes_mm", []))
         for side in (0, 1):
             a = wall.body.point(g.from_start, side * wall.thickness)
             b = wall.body.point(g.from_start + g.width, side * wall.thickness)
@@ -138,7 +138,7 @@ def analyze_stair(element: Element, ctx: AnalysisContext) -> Analysis:
         if room.level is None:
             continue
         floor = ctx.house.levels[room.level].elevation
-        polygon = Polygon(room.element.outline)
+        polygon = Polygon(room.element.outline, getattr(room.element, "holes_mm", []))
         if abs(floor - base) <= 1:
             clear_width = _foot_width(polygon, frame, g.going, width)
             if clear_width > TOLERANCE:

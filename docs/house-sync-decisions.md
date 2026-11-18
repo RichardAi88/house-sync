@@ -42,13 +42,13 @@ The first version has a global paint name and HEX selection, defaulting to Light
 
 Entities: W1, W2, W3, W4, S0, R0, D1, N1, N2, ROOM1
 
-Wall volume comes from the final compiled solids after opening cuts. For this uniform rectangular shell, equivalent net wall area is volume divided by thickness and the combined internal/external net face area is twice that value. Paint excludes reveals, sills, soffits, floor/roof paint, waste, and coat multipliers. Parent door/window products are counted once; their generated parts are not separate openings. These rules must be revisited before supporting nonuniform walls or more complex geometry.
+**Historical basis; D-017 supersedes the paint exclusions and extends the trade measurements.** Wall volume comes from the final compiled solids after opening cuts. For this uniform rectangular shell, equivalent net wall area is volume divided by thickness and the combined internal/external net face area is twice that value. Paint excludes reveals, sills, soffits, floor/roof paint, waste, and coat multipliers. Parent door/window products are counted once; their generated parts are not separate openings. These rules must be revisited before supporting nonuniform walls or more complex geometry.
 
 ## D-008 Keep prices explicit and illustrative
 
 Entities: W1, W2, W3, W4, S0, R0, D1, N1, N2
 
-The six BOQ items use five editable rates: floor per m2, wall per m3, roof per m2, paint per m2, and one shared allowance per door/window. The currency defaults to SGD. Rates do not represent quotations. The subtotal excludes taxes, preliminaries, foundations, services, and unmodelled work. Separate door/window products and project rate sources are planned.
+**Historical basis; D-017 supersedes the item count, default currency and pricing settings.** The six BOQ items use five editable rates: floor per m2, wall per m3, roof per m2, paint per m2, and one shared allowance per door/window. The currency defaults to SGD. Rates do not represent quotations. The subtotal excludes taxes, preliminaries, foundations, services, and unmodelled work. Separate door/window products and project rate sources are planned.
 
 ## D-009 Generate all outputs from one compiled result
 
@@ -103,3 +103,59 @@ Entities: W1, W2, W3, W4, ROOM1
 Doors/windows retain stable D/N identifiers and explicit hosts. Opening starts use the inner reference direction: W1 eastwards, W2 northwards, W3 westwards and W4 southwards. A null start means automatic centring; fixed starts remain fixed when a wall grows. The compiler receives the host-relative start with the corner return allowance on W1/W3. At least 100 mm is required at each inner end, above the opening and between openings on one host. These are concept editing constraints. The application rejects invalid fits instead of silently relocating or shrinking the opening.
 
 The BOQ, specification and plan/elevation schedules use the compiled opening dimensions and IDs. Per-ID change descriptions record additions, removals, moves and size/sill edits, including zero-cost changes. Omitted opening arrays in old saved designs resolve to the original three defaults. Access, structure, door approach zones, circulation, furniture and regulatory suitability require separate project review.
+
+## D-017 Extend geometry take-off to finishing trades and AUD pricing
+
+Entities: ROOM1, W1, W2, W3, W4, S0, R0, and all compiled door/window products.
+
+This decision supersedes the limited trade/paint measurement scope in D-007 and the six-item SGD defaults in D-008. The existing clear dimensions, corner ownership, stable element IDs and compiled geometry authority remain unchanged.
+
+Floor finish and ceiling use compiled clear internal room area. Skirting uses compiled internal perimeter less compiled door opening widths. Internal plaster/render and external render are measured from exact compiled STEP wall faces clipped to the internal room and external shell boundary planes, after opening deductions. This excludes buried corner tabs while retaining exposed corner returns; rounded viewer OBJ coordinates are unsuitable for take-off. Combined internal/external net wall faces remain the measured paint area. Production take-off reads compiled geometry rather than hard-coded sample quantities or a separate browser calculation. Ceiling and finishes are quantity allowances against the shell geometry; this decision does not introduce ceiling framing, finish-layer assemblies or construction system design.
+
+The default 10 x 8 m shell measures 80 m2 floor finish/ceiling, 35 m skirting, 102.3 m2 internal plaster/render and 107.1 m2 external render. The measured paint area is 209.4 m2. The editable coat count defaults to 2, giving a net painted quantity of 418.8 m2; descriptions retain the underlying measured net area. Reveals, sills, soffits, and floor/roof/ceiling paint remain excluded.
+
+Each of the eleven BOQ rows exposes net quantity, wastage percentage and gross quantity. Painting applies coats before wastage. Gross quantity is net quantity multiplied by `1 + wastage / 100`, rounded half-up to six decimal places, and the row amount is gross quantity multiplied by rate, rounded half-up to two decimal places. Default wastage is 10% floor finish/skirting, 5% ceiling/internal plaster/external render and 0% elsewhere, including paint. Changes to coats or wastage alter priced quantities without modifying the geometry.
+
+**Historical pricing defaults; D-018 supersedes the shared opening rate and global library provenance.** New designs default to AUD, with ten editable rates and a shared door/window allowance. The source label is **illustrative AUD rates, not a tender estimate**; no supplier quotes are invented. Validated editable rate source and date fields retain the pricing basis, with 2026-11-17 as the demonstration date. At default rates, coats and wastage, the 10 x 8 m subtotal is AUD 53,330.22 and the 12 x 8 m subtotal AUD 61,640.22. Taxes, preliminaries, foundations, services and all other unmodelled scope remain excluded.
+
+Omitted new settings in old design inputs receive defaults. Comparison normalises those omitted settings before identifying changes, while retaining saved BOQ rows and totals as the authority. Previously issued snapshots are not silently repriced, recast into AUD, or rewritten. Quantity effects use gross priced quantities at the original rate; rate effects use the new gross quantity. Rounding still reconciles to the recorded item amounts. Comparing revisions in different currencies remains refused without an explicit conversion policy.
+
+## D-018 Version the CSV rate library and separate project overrides
+
+Entities: all eleven BOQ codes, their effective rate records and each generated revision.
+
+`rates/rates_aud.csv` is the editable default pricing source. It contains exactly one row per code, including independent `DOOR` and `WINDOW` rows. Its columns are `code`, `description`, `unit`, `rate`, `currency`, `source`, `effective_date` and `notes`. Rows must use the expected measurement units, finite positive library rates, one currency and valid ISO dates. Invalid rows fail explicitly with a CSV line reference. An installed package includes the default CSV; the server can select another complete library with `--rates`.
+
+The shipped AUD allowances remain illustrative, dated 2026-11-17, with no supplier quotes or market-price claim. Editing the file does not make its rates verified. Sources, effective dates, notes and product scope must describe the evidence actually supplied by the user. The source library and project overrides are pricing data; geometry and quantities remain controlled by the compiled model.
+
+Modern settings store optional `rate_overrides` by BOQ code. An explicit override takes precedence over its library row; blank means follow the library and zero is a valid override. Each override uses the project's override source/date, while a library-derived rate uses that row's source/date. **Use library** removes the selected override. A priced build requires matching design/library currency or explicit prices for every item; currency conversion is never inferred.
+
+The **Rates** tab displays the current CSV values and metadata, the current SHA-256 and the displayed revision's saved library SHA-256. **Refresh rate library** reads the file again for review. Applying a different library or override requires an explicit house/document update. Earlier snapshots remain unchanged. Every new revision captures the full SHA-256 over raw CSV bytes, the detached library rows and the resolved per-item rate basis. Changes to source/date or other file bytes can create a new revision without a monetary change.
+
+A-to-B costing first changes quantities at the old effective rate. For revisions with a known library basis, it then changes the library while holding the old overrides and uses the new quantity, followed by changing overrides against the new library at that same quantity. Those effects plus rounding reconcile to the saved BOQ difference. An existing override may therefore shield an item from a library rate change. Missing historical library or override evidence remains unknown; it is not fabricated to force an attribution.
+
+Explicit legacy stored prices are retained as overrides, including the former shared door/window value mapped to both codes. They are not silently reset to the latest CSV. Pre-finishes foreign-currency designs may be opened but must supply missing item prices or a matching-currency library before a new priced build. Original saved BOQs, currencies, amounts and revision identities remain authoritative for historical reports, and cross-currency comparison remains refused.
+
+## D-019 Export draft purchasing forms from the saved BOQ
+
+Entities: each saved BOQ row and its source house revision.
+
+The **Purchasing** tab offers one fillable draft purchase-order PDF per BOQ item and a ZIP of the item PDFs. Each PDF prints the saved revision and a reference derived from its BOQ code. The description, gross priced quantity, unit, effective rate, currency and amount come from the saved BOQ, preserving the same pricing basis as that revision's coordinated documents. Legacy revisions use their existing rows and saved priced quantities; no model rebuild or current-library repricing is required to describe their recorded scope.
+
+A BOQ quantity is a pricing measure, not an inferred supplier pack quantity. Painting keeps its saved coat-adjusted pricing quantity; it is not converted to litres or tins. Other items are not rounded into packs or order increments without explicit product and coverage data. Existing wastage is already part of the saved gross quantity and is not applied again. Illustrative rates remain illustrative, and the form is a draft for review.
+
+Buyer, supplier, required-by, delivery and approval fields may be filled in a compatible PDF viewer after download. The application does not send orders, contact suppliers, sign or approve forms, or write those downloaded form edits back into the house model. A successful house update supplies the revision used for current purchasing downloads; pending model edits do not issue a purchasing set for an unsaved design.
+
+## D-020 Derive rooms from partition centrelines and measure the compiled solids
+
+Partition coordinates are millimetres from the south-west inside corner. Each stable partition ID has a horizontal or vertical centreline, thickness, height and wall type. Its two endpoints meet the inside of the shell or another partition centreline. The line and its authored direction define opening offsets. Wall thickness extends equally on both sides. Flush joins, T-junctions, crossings and closed internal loops are supported. Solid junction ownership is deterministic, and overlapping material at the same elevation belongs to a single wall.
+
+Room polygons come from enclosed regions inside the shell, offset to the modelled wall faces; finishes have no separate thickness. Interior rings subtract from the surrounding region. Door gaps connect adjacent rooms while retaining the wall line as the room boundary. The optional room settings contain names and floor, ceiling, skirting and paint selections. Region identities use a canonical sequence of boundary wall IDs and sides. Moving the same boundaries preserves the room identity and selections. A split or merge may produce a new identity. A design without partitions retains `ROOM1`, its saved BOQ codes and its original quantities.
+
+The application checks orthogonality, endpoint attachments, collisions, minimum clear room width in both orthogonal directions (default 900 mm), and a path through doors from the exterior into every partitioned room. Openings maintain 100 mm end, head, junction and same-host opening clearance. A small detached enclosure with fully joined corners can be reached through its own door. The unpartitioned legacy design can still be opened with its original opening schedule, including an empty schedule. These checks concern the application model. Statutory access, escape, fire performance and structure require project-specific assessment.
+
+The structural slab spans the original clear shell. Each room uses its compiled clear area for floor finish and ceiling and its perimeter less adjacent door widths for skirting. The two sides of an internal door interrupt two runs of skirting. Shell and partition wall volumes use final opening-cut solids and share the existing cubic-metre wall rate. Plaster and paint measure exposed vertical wall faces on the room side, including both sides of partitions. Openings and hidden junction contacts are deducted. Exposed faces above a lower wall at a junction are measured once and allocated to the nearest room on the exposed side, with room ID resolving a tie. Opening reveals, sills, soffits and horizontal partition tops are outside this allowance. The room scope extends over its clear floor footprint even when its bounding partition stops below the shell ceiling.
+
+Shared construction and exterior finishes appear in the shell group. The five internal trade lines carry a stable room ID and their original rate code. Each group subtotal sums rounded item amounts. Changes use the saved quantities and underlying rate codes, and report moved/added/removed partitions and renamed/refinished rooms by ID. The original single-room BOQ retains its combined internal and exterior paint line to preserve issued quantities and comparisons.
+
+In the 10 × 8 m worked example, the full north–south wall at x = 4000 mm and one internal door yield 79.200 m² of clear rooms, 2.190 m³ of partition wall and 48.800 m skirting. Adding the eastern branch at y = 3000 mm and its door yields 78.605 m², 3.765 m³ and 58.500 m respectively. The README gives each room calculation and the priced subtotals.
