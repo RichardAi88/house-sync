@@ -1,10 +1,14 @@
 # House Sync project plan
 
-House Sync connects one editable house model to a bill of quantities, a draft technical specification, and dimensioned drawings. A user changes the house settings and selects **Update house and documents**. The application rebuilds the model and all affected outputs from the same inputs and records a shared revision.
+## Goal
+
+Carry a client’s pre-construction change through drafting, estimating, scheduling and purchasing on one model revision. The audience is Australian custom and semi-custom home builders, where nearly every house is tailored to the client and variations repeatedly pass between teams.
+
+The drafter updates the model, drawings and specification. The estimator compares the proposed revision B with the previous revision A and prepares the variation for the client. If the client requests a different design, the drafter revises it and the estimator prices the new proposal. Once the client accepts, the scheduler releases the BOQ for the accepted revision and purchasing uses its quantities to raise orders. Each document identifies the revision it came from.
 
 The project starts from [homespec](https://github.com/maccman/homespec), an MIT-licensed house modelling and export engine. The original licence, attribution, and source history are retained. House Sync adds a local browser application, validated inputs, pricing allowances, and document exporters.
 
-## Current first version
+## Current scope on `main`
 
 The demonstration is a single rectangular room shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
 
@@ -23,6 +27,8 @@ The demonstration is a single rectangular room shell, as a concept house. Defaul
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |
 
 All exported documents are snapshots of the selected design revision. Editing an exported spreadsheet or Word document does not change the model. Saved settings provide the application's editable inputs.
+
+The model update generates the BOQ alongside the drawings and specification. The **Changes & cost** tab compares two saved revisions and exports a draft variation order that identifies both. Client sign-off and release of orders sit with the builder. The purchasing export and AUD pricing are in review.
 
 ## Implemented core
 
@@ -58,19 +64,16 @@ Actual default exports were generated locally. The drawing PDF was rendered and 
 
 The DOCX package and contents passed structural tests. Visual DOCX rendering was unavailable on the setup host: LibreOffice was absent and native Word automation could not obtain a Windows logon session. Word layout should be visually checked on a working Word/LibreOffice installation before treating it as a reviewed issue document.
 
-## Planned development
+## Next features in builder workflow order
 
-| Milestone | Intended result |
-| --- | --- |
-| Implemented: editable openings | Add, remove, resize and move stable-ID doors/windows within validated hosts |
-| Multiple rooms | Internal partitions, room boundaries, room schedules, and reliable junction quantities |
-| Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
-| Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
-| Project rates | Separate item rates, supplier quotations, location/currency context, taxes, waste, and revision dates |
-| Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
-| Further CAD editing | Arbitrary wall segments, reliable junctions, partitions and multiple rooms |
-| Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |
-| Deployment | Evaluate an authenticated hosted service after the local workflow is reliable |
+| Team | In review | Further work |
+| --- | --- | --- |
+| 1. Drafter | Orthogonal partitions, named rooms, room finish schedules and dimensioned plans. [PR #4](https://github.com/RichardAi88/house-sync/pull/4) | Extend plan editing beyond orthogonal walls. Record per-face finishes, product and colour references, substrate, preparation and coating system. |
+| 2. Estimator | Illustrative AUD rates, a dated CSV rate library and separate variation effects for changes in quantities, library rates and project overrides. [PR #1](https://github.com/RichardAi88/house-sync/pull/1) · [PR #2](https://github.com/RichardAi88/house-sync/pull/2) | Add supplier quotations, location and tax treatment. Record the client’s decision against the priced revision so the scheduler can identify which revision to release. |
+| 3. Scheduler | Finish trades, paint coats, wastage allowances and room BOQ subtotals. [PR #1](https://github.com/RichardAi88/house-sync/pull/1) · [PR #4](https://github.com/RichardAi88/house-sync/pull/4) | Identify the BOQ issued for each accepted variation in an issue register. |
+| 4. Purchasing | One fillable draft purchase order per saved BOQ item, with a download for the complete set. [PR #3](https://github.com/RichardAi88/house-sync/pull/3) | Link supplier and product selections to order lines and record which orders have been issued. |
+
+Configurable document templates and an authenticated hosted service remain longer-term options once the local workflow is established.
 
 ## Engineering and contractual limits
 

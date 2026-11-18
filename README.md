@@ -1,10 +1,43 @@
 # House Sync
 
-A house model with a coordinated bill of quantities, technical specification, and dimensioned drawings. Change dimensions or the paint finish in the local browser editor, then select **Update house & documents** to regenerate the complete set from one shared model revision.
+**One design change, instantly coordinated across drawings, cost variation, BOQ and purchase orders.**
 
-Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The original MIT licence, source, examples and Git history are retained. Read the [original homespec README](HOMESPEC_README.md) for its compiler and Blender workflows.
+## The problem
+
+A client moves a wall before construction. The drafter revises the drawings and the estimator prices the variation. If the client accepts, the scheduler prepares the bill of quantities (BOQ) and purchasing raises orders. If they decline, the cycle starts again. Re-keying the change at each handoff can add days and leave drawings, costs and orders on different revisions.
+
+## What House Sync does
+
+Updating one shared model regenerates the drafter’s drawings and specification. The estimator compares the previous design (A) with the proposed design (B) to price the variation and prepare a draft variation order. The scheduler gets B’s BOQ. The purchasing feature in review turns its line items into draft orders. Every document carries B’s revision ID, and the variation order also identifies A.
+
+## Who it’s for
+
+Australian custom and semi-custom home builders, where nearly every home is tailored to the client and frequent variations make repeated handoffs costly.
+
+## Workflow
+
+```mermaid
+flowchart TD
+    change["Client requests a design change"] --> drawings["Drafter revises drawings and specification"]
+    drawings --> variation["Estimator prices the A-to-B variation"]
+    variation --> decision{"Client accepts?"}
+    decision -->|No| change
+    decision -->|Yes| boq["Scheduler releases the accepted BOQ"]
+    boq --> orders["Purchasing raises purchase orders"]
+```
+
+## Status
+
+House Sync is a concept application. Quantities come from the demonstration model. The proposed Australian pricing uses **illustrative AUD rates, not a tender estimate**.
+
+- **On `main`** — A single-room plan editor generates drawings, a specification, IFC and a six-item BOQ. Saved revisions can be compared to produce a cost variation and draft variation order. The current default currency is SGD.
+- **In open pull requests** — AUD pricing and finishing trades, a rate library, draft purchase orders per BOQ item, and internal partitions with room-by-room costing. [AUD trades](https://github.com/RichardAi88/house-sync/pull/1) · [Rate library](https://github.com/RichardAi88/house-sync/pull/2) · [Purchase orders](https://github.com/RichardAi88/house-sync/pull/3) · [Rooms](https://github.com/RichardAi88/house-sync/pull/4)
+
+The model calculates the BOQ when the drafter updates the design. Client acceptance and release of orders are decisions the builder manages.
 
 ## First version
+
+Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The original MIT licence, source, examples and Git history are retained. Read the [original homespec README](HOMESPEC_README.md) for its compiler and Blender workflows.
 
 - A single-storey, single-room rectangular shell with a flat roof; one door and two windows by default.
 - Editable clear internal length/width, wall height/thickness, paint name/colour, currency, and five illustrative unit rates.
@@ -33,7 +66,7 @@ Every successful update preserves the previous design and automatically creates 
 
 Select **Export variation order PDF** to download a draft variation order for the selected A-to-B comparison. It includes a VO reference, source revisions, change descriptions, itemised quantities/rates and costs, additions/omissions, the net variation and revised estimate, plus contract reference and approval/signature fields. Exporting leaves the order as a draft for review and approval; it does not approve a variation or assess programme impact.
 
-The default 10 x 8 m design has an illustrative subtotal of SGD 28,574.80. Increasing its length to 12 m at the same rates gives SGD 33,022.80, a **SGD 4,448.00 increase**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+On `main`, the default 10 x 8 m design has an illustrative subtotal of SGD 28,574.80. Increasing its length to 12 m at the same rates gives SGD 33,022.80, a **SGD 4,448.00 increase**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
 The comparison separates quantity effects from rate effects and reconciles them to rounded BOQ amounts. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
 
