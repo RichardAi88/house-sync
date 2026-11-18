@@ -1,0 +1,12 @@
+code,description,unit,rate,currency,source,effective_date,notes
+FLOOR,150 mm floor slab allowance,m2,95,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+WALL,Uniform masonry wall allowance,m3,380,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+ROOF,Flat roof allowance,m2,145,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+PAINT,Wall painting per square metre per coat,m2,9,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Coats and wastage are applied separately to measured geometry; no supplier quote."
+DOOR,Door allowance,each,650,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+WINDOW,Window allowance,each,650,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+FLOOR_FINISH,Floor finish allowance,m2,65,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+CEILING,Ceiling allowance,m2,45,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+SKIRTING,Skirting allowance,m,18,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+INTERNAL_PLASTER,Internal plaster/render allowance,m2,28,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."
+EXTERNAL_RENDER,External render allowance,m2,40,AUD,illustrative,2026-11-17,"Illustrative AUD rates, not a tender estimate; Demonstration input; no supplier quotation or market rate asserted."

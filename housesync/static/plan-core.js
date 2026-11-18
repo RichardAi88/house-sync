@@ -3,10 +3,14 @@ export const HOSTS = Object.freeze(['W1', 'W2', 'W3', 'W4']);
 export const HOST_LABELS = Object.freeze({ W1: 'south', W2: 'east', W3: 'north', W4: 'west' });
 const EPSILON = 1e-6;
 
-export const RATE_DEFAULTS = Object.freeze({
-  floor_m2: 95, wall_m3: 380, roof_m2: 145, paint_m2: 9, opening_each: 650,
-  floor_finish_m2: 65, ceiling_m2: 45, skirting_m: 18, internal_plaster_m2: 28, external_render_m2: 40,
-});
+export const RATE_ITEMS = Object.freeze([
+  ['FLOOR', 'Floor slab', 'm2', 'floor_m2'], ['WALL', 'Wall construction', 'm3', 'wall_m3'],
+  ['ROOF', 'Roof', 'm2', 'roof_m2'], ['PAINT', 'Paint per coat', 'm2', 'paint_m2'],
+  ['DOOR', 'Doors', 'each', 'opening_each'], ['WINDOW', 'Windows', 'each', 'opening_each'],
+  ['FLOOR_FINISH', 'Floor finish', 'm2', 'floor_finish_m2'], ['CEILING', 'Ceiling', 'm2', 'ceiling_m2'],
+  ['SKIRTING', 'Skirting', 'm', 'skirting_m'], ['INTERNAL_PLASTER', 'Internal plaster/render', 'm2', 'internal_plaster_m2'],
+  ['EXTERNAL_RENDER', 'External render', 'm2', 'external_render_m2'],
+]);
 export const WASTAGE_DEFAULTS = Object.freeze({
   floor: 0, wall: 0, roof: 0, paint: 0, door: 0, window: 0,
   floor_finish: 10, ceiling: 5, skirting: 10, internal_plaster: 5, external_render: 5,
@@ -16,11 +20,17 @@ export const RATE_DATE_DEFAULT = '2026-11-17';
 
 /** Fill absent pricing fields without replacing historical currency or entered rates. */
 export function normalizeBoqSettings(settings) {
-  return {
+  const result = {
     ...settings, currency: settings.currency ?? 'AUD', paint_coats: settings.paint_coats ?? 2,
-    rates: { ...RATE_DEFAULTS, ...settings.rates }, wastage: { ...WASTAGE_DEFAULTS, ...settings.wastage },
+    rate_overrides: settings.rate_overrides === undefined
+      ? Object.fromEntries(RATE_ITEMS.filter(([, , , key]) => Object.hasOwn(settings.rates ?? {}, key)).map(([code, , , key]) => [code, settings.rates[key]]))
+      : { ...settings.rate_overrides },
+    wastage: { ...WASTAGE_DEFAULTS, ...settings.wastage },
     rate_source: settings.rate_source ?? RATE_SOURCE_DEFAULT, rate_date: settings.rate_date ?? RATE_DATE_DEFAULT,
   };
+  // The old rates mirror must never pin library-driven new designs to defaults.
+  delete result.rates;
+  return result;
 }
 
 function copy(value) {
@@ -189,8 +199,10 @@ export function describeChanges(before, after) {
       if (!same(previous[key], opening[key])) descriptions.push(id + ' ' + name + ': ' + format(previous[key]) + ' to ' + format(opening[key]) + ' mm.');
     }
   }
-  const rates = new Set([...Object.keys(a.rates || {}), ...Object.keys(b.rates || {})]);
-  for (const key of rates) if (!same(a.rates?.[key], b.rates?.[key])) descriptions.push(key.replaceAll('_', ' ') + ' rate: ' + format(a.rates?.[key]) + ' to ' + format(b.rates?.[key]) + '.');
+  const overrides = new Set([...Object.keys(a.rate_overrides), ...Object.keys(b.rate_overrides)]);
+  for (const code of overrides) if (!same(a.rate_overrides[code], b.rate_overrides[code])) {
+    descriptions.push(code.replaceAll('_', ' ') + ' rate: ' + (Object.hasOwn(a.rate_overrides, code) ? format(a.rate_overrides[code]) + ' override' : 'library') + ' to ' + (Object.hasOwn(b.rate_overrides, code) ? format(b.rate_overrides[code]) + ' override' : 'library') + '.');
+  }
   if (!same(a.paint_coats, b.paint_coats)) descriptions.push('Paint coats: ' + format(a.paint_coats) + ' to ' + format(b.paint_coats) + '.');
   const wastage = new Set([...Object.keys(a.wastage), ...Object.keys(b.wastage)]);
   for (const key of wastage) if (!same(a.wastage[key], b.wastage[key])) descriptions.push(key.replaceAll('_', ' ') + ' wastage: ' + format(a.wastage[key]) + '% to ' + format(b.wastage[key]) + '%.');

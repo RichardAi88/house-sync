@@ -58,10 +58,45 @@ def _measurement(result: dict[str, Any]) -> str:
 def _rate_notes(result: dict[str, Any]) -> list[str]:
     settings = _data(result)
     currency = result["totals"].get("currency", settings.get("currency", "AUD"))
-    return [
+    notes = [
         f"Illustrative {currency} rates, not a tender estimate. Editable assumptions; no supplier quotes.",
         f"Rate source: {settings.get('rate_source', 'Not recorded in this saved revision')} | Rate date: {settings.get('rate_date', 'Not recorded')}",
     ]
+    library = result.get("rate_library")
+    if isinstance(library, dict) and library.get("sha256"):
+        if any(not str(row.get("rate_source", "")).casefold().startswith("illustrative") for row in result["boq"]):
+            notes[0] = f"Saved {currency} unit rates, not a tender estimate. Refer to each item's recorded source; supplier quotations are not inferred."
+        notes[1] = f"Selected rate library SHA-256: {library['sha256']}. Each item's saved source, effective date and rate origin are recorded in the rate provenance schedule."
+    return notes
+
+
+def _rate_provenance(result: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """Use saved provenance only; never infer an old snapshot's library."""
+    library = result.get("rate_library") or {}
+    selected = library.get("rows", {}).get(item["code"], {})
+    return {
+        "origin": item.get("rate_origin", "Not recorded"),
+        "library_rate": item.get("library_rate", selected.get("rate")),
+        "library_currency": item.get("library_currency", selected.get("currency", library.get("currency", "Not recorded"))),
+        "library_source": selected.get("source", "Not recorded"),
+        "library_effective_date": selected.get("effective_date", "Not recorded"),
+        "source": item.get("rate_source", _data(result).get("rate_source", selected.get("source", "Not recorded"))),
+        "effective_date": item.get("rate_effective_date", _data(result).get("rate_date", selected.get("effective_date", "Not recorded"))),
+        "sha256": library.get("sha256", "Not recorded"),
+        "notes": selected.get("notes", ""),
+    }
+
+
+def _rate_provenance_rows(result: dict[str, Any]) -> list[tuple[str, str]]:
+    rows = []
+    for item in result["boq"]:
+        info = _rate_provenance(result, item)
+        library_rate = "Not recorded" if info["library_rate"] is None else f"{info['library_rate']:g}"
+        rows.append((item["code"], f"Applied rate {item['rate']:g} {result['totals']['currency']} / {item['unit']}; origin {info['origin']}; "
+                     f"selected library rate {library_rate} {info['library_currency']}. Applied source: {info['source']}. "
+                     f"Applied effective date: {info['effective_date']}. Library source: {info['library_source']}; "
+                     f"library effective date: {info['library_effective_date']}." + (f" Notes: {info['notes']}" if info["notes"] else "")))
+    return rows
 
 
 def _row_quantities(item: dict[str, Any]) -> tuple[float, float, float]:
@@ -153,15 +188,55 @@ def _boq(result: dict[str, Any], output: Path) -> None:
     ws.print_title_rows = "1:6"
     ws.oddFooter.center.text = f"Revision {result['revision']}"
     wb.calculation = CalcProperties(fullCalcOnLoad=True)
+    provenance = wb.create_sheet("Rate provenance")
+    provenance.sheet_view.showGridLines = False
+    provenance.append(["Rate provenance", f"Design revision {result['revision']}"])
+    provenance.append(["Selected library SHA-256", (result.get("rate_library") or {}).get("sha256", "Not recorded in this saved revision")])
+    provenance.append(["Item", "Applied rate", "Applied currency", "Rate origin", "Selected library rate", "Applied source", "Applied effective date",
+                       "Library currency", "Library source", "Library effective date", "Notes"])
+    for item in result["boq"]:
+        info = _rate_provenance(result, item)
+        provenance.append([_safe_cell(item["code"]), item["rate"], currency, info["origin"], info["library_rate"],
+                           _safe_cell(info["source"]), info["effective_date"], info["library_currency"],
+                           _safe_cell(info["library_source"]), info["library_effective_date"], _safe_cell(info["notes"])])
+    for row in provenance:
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            cell.font = Font(name="Calibri", size=10, color="000000")
+            if cell.row == 3:
+                cell.fill = PatternFill("solid", fgColor=INK[1:])
+                cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        provenance.row_dimensions[row[0].row].height = 44 if row[0].row > 3 else 32
+    provenance.merge_cells("B2:K2")
+    for col, width in {"A": 23, "B": 16, "C": 16, "D": 15, "E": 20, "F": 45, "G": 19, "H": 17, "I": 45, "J": 19, "K": 55}.items():
+        provenance.column_dimensions[col].width = width
+    for row in range(4, len(result["boq"]) + 4):
+        provenance.cell(row, 2).number_format = provenance.cell(row, 5).number_format = "#,##0.00"
+        info = _rate_provenance(result, result["boq"][row - 4])
+        provenance.row_dimensions[row].height = max(44, 14 * max(ceil(len(str(info["source"])) / 42), ceil(len(str(info["library_source"])) / 42),
+                                                               ceil(len(str(info["notes"])) / 52)) + 8)
+    provenance.freeze_panes = "B4"
+    provenance.auto_filter.ref = f"A3:K{len(result['boq']) + 3}"
+    provenance.page_setup.orientation = "landscape"
+    provenance.page_setup.paperSize = provenance.PAPERSIZE_A3
+    provenance.page_setup.fitToWidth = 1
+    provenance.page_setup.fitToHeight = 0
+    provenance.sheet_properties.pageSetUpPr.fitToPage = True
+    provenance.print_title_rows = "1:3"
+    provenance.print_area = f"A1:K{len(result['boq']) + 3}"
     wb.save(output / "boq.xlsx")
     with (output / "boq.csv").open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(["Project", _safe_cell(settings["project_name"]), "Revision", result["revision"], "Currency", currency])
-        writer.writerow(headers)
+        writer.writerow([*headers, "Rate origin", "Selected library rate", "Rate source", "Rate effective date", "Library SHA-256", "Rate notes",
+                         "Library currency", "Library source", "Library effective date"])
         for item in result["boq"]:
             net, wastage, gross = _row_quantities(item)
+            info = _rate_provenance(result, item)
             writer.writerow([_safe_cell(item["code"]), _safe_cell(item["description"]), item["unit"], net, wastage, gross,
-                             item["rate"], item["amount"], ", ".join(item.get("element_ids", []))])
+                             item["rate"], item["amount"], ", ".join(item.get("element_ids", [])), info["origin"], info["library_rate"],
+                             _safe_cell(info["source"]), info["effective_date"], info["sha256"], _safe_cell(info["notes"]), info["library_currency"],
+                             _safe_cell(info["library_source"]), info["library_effective_date"]])
         writer.writerow(["", "Estimated subtotal", "", "", "", "", "", result["totals"]["subtotal"]])
         writer.writerow(["Measurement", _measurement(result)])
         for note in _rate_notes(result):
@@ -301,6 +376,8 @@ def _specification(result: dict[str, Any], output: Path) -> None:
     _docx_table(doc, dimensions)
     doc.add_heading("Materials and finishes", level=1)
     _docx_table(doc, materials)
+    doc.add_heading("Rate provenance", level=1)
+    _docx_table(doc, _rate_provenance_rows(result))
     doc.add_heading("Measurement and scope", level=1)
     for note in notes[1:]:
         doc.add_paragraph(note)
@@ -319,7 +396,7 @@ def _specification(result: dict[str, Any], output: Path) -> None:
                              leading=15, spaceBefore=10, spaceAfter=6, textColor=colors.black)
     story: list[Any] = [Paragraph("House technical specification", title), Paragraph(html.escape(settings["project_name"]), body),
                         Paragraph(f"Draft attachment to contract | Design revision {result['revision']}", body), Paragraph(html.escape(notes[0]), body)]
-    for label, rows in (("Dimensions", dimensions), ("Materials and finishes", materials)):
+    for label, rows in (("Dimensions", dimensions), ("Materials and finishes", materials), ("Rate provenance", _rate_provenance_rows(result))):
         story.append(Paragraph(label, heading))
         table_data = [[Paragraph(html.escape(a), body), Paragraph(html.escape(b), body)] for a, b in [("Item", "Requirement")] + rows]
         table = Table(table_data, colWidths=[43 * mm, 130 * mm], repeatRows=1, hAlign="LEFT")

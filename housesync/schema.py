@@ -3,35 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
+from .rates import BOQ_CODES
+
 OPENING_CLEARANCE_MM = 100.0
-
-
-class UnitRates(BaseModel):
-    """Illustrative allowances only; users must supply project-specific rates."""
-
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, validate_assignment=True)
-
-    floor_m2: float = Field(default=95, ge=0, le=1_000_000)
-    wall_m3: float = Field(default=380, ge=0, le=1_000_000)
-    roof_m2: float = Field(default=145, ge=0, le=1_000_000)
-    paint_m2: float = Field(default=9, ge=0, le=1_000_000)
-    opening_each: float = Field(default=650, ge=0, le=1_000_000)
-    floor_finish_m2: float = Field(default=65, ge=0, le=1_000_000)
-    ceiling_m2: float = Field(default=45, ge=0, le=1_000_000)
-    skirting_m: float = Field(default=18, ge=0, le=1_000_000)
-    internal_plaster_m2: float = Field(default=28, ge=0, le=1_000_000)
-    external_render_m2: float = Field(default=40, ge=0, le=1_000_000)
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def numeric_rates(cls, value: object) -> object:
-        if isinstance(value, bool):
-            raise ValueError("unit rates must be numbers, not booleans")
-        return value
 
 
 class WastageSettings(BaseModel):
@@ -121,11 +99,48 @@ class HouseSettings(BaseModel):
     paint_hex: str = Field(default="#ADD8E6", pattern=r"^#[0-9A-Fa-f]{6}$")
     currency: str = Field(default="AUD", pattern=r"^[A-Z]{3}$")
     paint_coats: StrictInt = Field(default=2, ge=1, le=10)
-    rates: UnitRates = Field(default_factory=UnitRates)
+    rate_overrides: dict[str, Annotated[float, Field(ge=0, le=1_000_000)]] = Field(default_factory=dict)
     wastage: WastageSettings = Field(default_factory=WastageSettings)
     rate_source: str = Field(default="Illustrative AUD rates, not a tender estimate; no supplier quotes", min_length=1, max_length=240)
     rate_date: date = Field(default=date(2026, 11, 17))
     openings: list[OpeningSettings] = Field(default_factory=default_openings, max_length=40)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_rates(cls, value: Any) -> Any:
+        """Pin supplied historical prices without pinning current library defaults.
+
+        The presence of the new key is authoritative, including an empty map:
+        stale legacy ``rates`` then has no effect. Canonical dumps contain only
+        overrides, so new settings continue to follow library edits on reload.
+        """
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        legacy = values.pop("rates", None)
+        if "rate_overrides" not in values and "rates" in value:
+            if not isinstance(legacy, dict):
+                raise ValueError("legacy rates must be an object")
+            legacy_keys = {legacy_key for _, legacy_key in BOQ_CODES.values()}
+            unknown = set(legacy) - legacy_keys
+            if unknown:
+                raise ValueError(f"unknown legacy rate keys: {', '.join(sorted(unknown))}")
+            values["rate_overrides"] = {
+                code: legacy[legacy_key] for code, (_, legacy_key) in BOQ_CODES.items() if legacy_key in legacy
+            }
+        return values
+
+    @field_validator("rate_overrides", mode="before")
+    @classmethod
+    def valid_rate_overrides(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            raise ValueError("rate_overrides must be an object keyed by BOQ code")
+        unknown = set(value) - BOQ_CODES.keys()
+        if unknown:
+            raise ValueError(f"unknown rate override codes: {', '.join(sorted(str(code) for code in unknown))}")
+        if any(isinstance(rate, bool) for rate in value.values()):
+            raise ValueError("rate overrides must be numbers, not booleans")
+        return value
 
     @field_validator("project_name", "paint_colour", "rate_source")
     @classmethod

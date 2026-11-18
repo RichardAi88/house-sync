@@ -22,8 +22,8 @@ from pydantic import ValidationError
 
 from .changes import compare_revisions, export_change_report
 from .documents import export_documents
-from .engine import _revision as revision_for
-from .engine import build_house
+from .engine import build_house, revision_for
+from .rates import RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,8 +52,9 @@ def atomic_json(path: Path, data: dict) -> None:
 
 
 class Application:
-    def __init__(self, output_root: Path):
+    def __init__(self, output_root: Path, rate_library_path: Path | None = None):
         self.output_root = output_root.resolve()
+        self.rate_library_path = rate_library_path
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.latest: dict | None = None
@@ -85,7 +86,7 @@ class Application:
             after = self.read_revision(after_revision)
             # Legacy comparison normalisation depends on validated schema
             # defaults as well as report code; both version cached reports.
-            source = b"\0".join(Path(__file__).with_name(name).read_bytes() for name in ("changes.py", "schema.py"))
+            source = b"\0".join(Path(__file__).with_name(name).read_bytes() for name in ("changes.py", "schema.py", "rates.py"))
             version = hashlib.sha256(source).hexdigest()[:12]
             comparison_id = f"{before_revision}_{after_revision}_{version}"
             destination = self.changes_root / comparison_id
@@ -136,10 +137,11 @@ class Application:
                     enriched["last_change"] = self.compare(transition["before_revision"], result["revision"])
         return enriched
 
-    def build(self, settings: HouseSettings) -> dict:
+    def build(self, settings: HouseSettings, *, rate_library: RateLibrary | None = None) -> dict:
         with self.lock:
+            library = rate_library if rate_library is not None else load_rate_library(self.rate_library_path)
             previous = self._previous()
-            revision = revision_for(settings)
+            revision = revision_for(settings, library)
             destination = self.output_root / revision
             if (destination / "result.json").is_file():
                 self.latest = json.loads((destination / "result.json").read_text(encoding="utf-8"))
@@ -149,14 +151,13 @@ class Application:
             temporary = self.output_root / ("building-" + uuid.uuid4().hex)
             temporary.mkdir()
             try:
-                result = build_house(settings, temporary)
+                result = build_house(settings, temporary, library)
+                if result["revision"] != revision or not REVISION.fullmatch(revision):
+                    raise ValueError("Build inputs changed during generation. Please retry the update.")
                 result["files"].update(export_documents(result, temporary))
                 result["files"]["settings_json"] = "settings.json"
                 atomic_json(temporary / "settings.json", settings.model_dump(mode="json"))
                 result["created_at"] = datetime.now(UTC).isoformat()
-                revision = result["revision"]
-                if not REVISION.fullmatch(revision):
-                    raise ValueError("Engine returned an invalid revision")
                 result["files"] = {
                     key: "/files/" + revision + "/" + quote(value.replace("\\", "/"), safe="/")
                     for key, value in result["files"].items()
@@ -183,22 +184,22 @@ class Application:
                 raise
 
     def state(self) -> dict:
-        if self.latest:
-            return self.latest
-        latest_path = self.output_root / "latest.json"
-        if latest_path.exists():
-            try:
-                revision = json.loads(latest_path.read_text(encoding="utf-8"))["revision"]
-                if REVISION.fullmatch(revision):
-                    saved = json.loads((self.output_root / revision / "result.json").read_text(encoding="utf-8"))
-                    settings = HouseSettings.model_validate(saved["settings"])
-                    if revision_for(settings) == revision:
-                        self.latest = saved
-                        return self.latest
-                    return self.build(settings)
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
-        return self.build(HouseSettings())
+        with self.lock:
+            if self.latest:
+                return self.latest
+            saved = self._previous()
+            if saved is None:
+                library = load_rate_library(self.rate_library_path)
+                return self.build(HouseSettings(currency=library.currency), rate_library=library)
+            # Reopening uses the issued pricing basis. Only an explicit build
+            # adopts edited CSV prices. Pre-library snapshots have no such basis.
+            if "rate_library" in saved:
+                issued = RateLibrary(**saved["rate_library"])
+                settings = HouseSettings.model_validate(saved["settings"])
+                if revision_for(settings, issued) != saved["revision"]:
+                    return self.build(settings, rate_library=issued)
+            self.latest = saved
+            return saved
 
     def revisions(self) -> list[dict]:
         records = []
@@ -259,6 +260,8 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json({"status": "ok", "application": "House Sync", "features": ["revision_comparison"]})
                 elif path == "/api/state":
                     self._json(application.envelope(application.state()))
+                elif path == "/api/rates":
+                    self._json(load_rate_library(application.rate_library_path).snapshot())
                 elif path == "/api/revisions":
                     self._json(application.revisions())
                 elif path == "/api/compare":
@@ -353,6 +356,8 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             except ValidationError as exc:
                 messages = [".".join(map(str, item["loc"])) + ": " + item["msg"] for item in exc.errors()]
                 self._json({"error": "; ".join(messages)}, 422)
+            except RateLibraryError as exc:
+                self._json({"error": str(exc)}, 422)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, 400)
             except Exception as exc:
@@ -367,10 +372,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--open", action="store_true", help="Open the editor in the default browser")
     parser.add_argument("--output", type=Path, default=ROOT / "out" / "house-sync")
+    parser.add_argument("--rates", type=Path, help="Path to the project unit-rate CSV (default: rates/rates_aud.csv)")
     args = parser.parse_args()
     if not (ROOT / "node_modules" / "three" / "build" / "three.module.js").exists():
         parser.error("Browser dependencies are missing. Run npm ci in the project folder first.")
-    application = Application(args.output)
+    application = Application(args.output, rate_library_path=args.rates)
     server = LocalHTTPServer(("127.0.0.1", args.port), handler_for(application))
     url = f"http://127.0.0.1:{args.port}"
     print(f"House Sync is running at {url}\nRevision files: {args.output}\nPress Ctrl+C to stop.", flush=True)

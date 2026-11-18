@@ -21,6 +21,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .rates import BOQ_CODES
 from .schema import HouseSettings
 
 CENT = Decimal("0.01")
@@ -114,15 +115,171 @@ def _comparison_settings(settings: dict) -> dict:
     the original five rates and saved amounts remain exactly as recorded.
     """
     defaults = HouseSettings().model_dump(mode="json")
-    normalised = {key: value for key, value in settings.items() if key != "openings"}
+    normalised = {key: value for key, value in settings.items() if key not in {"openings", "rates", "rate_overrides"}}
     for field in ("paint_coats", "rate_source", "rate_date"):
         normalised.setdefault(field, defaults[field])
     normalised["wastage"] = {**defaults["wastage"], **settings.get("wastage", {})}
-    rates = dict(settings.get("rates", {}))
-    for key in ("floor_finish_m2", "ceiling_m2", "skirting_m", "internal_plaster_m2", "external_render_m2"):
-        rates.setdefault(key, defaults["rates"][key])
-    normalised["rates"] = rates
+    # Legacy rate inputs become explicit absolute overrides, not library rates.
+    # Compare their canonical meaning rather than their historical JSON shape.
+    overrides = (dict(settings["rate_overrides"]) if "rate_overrides" in settings else
+                 {code: settings["rates"][key] for code, (_, key) in BOQ_CODES.items() if key in settings.get("rates", {})})
+    normalised["rate_overrides"] = overrides
     return normalised
+
+
+def _saved_library(result: dict) -> dict:
+    library = result.get("rate_library")
+    return library if isinstance(library, dict) else {}
+
+
+def _library_changes(before: dict, after: dict) -> list[dict]:
+    old, new = _saved_library(before), _saved_library(after)
+    # Learning previously unrecorded provenance is not a changed rate library.
+    if not old.get("sha256") or not new.get("sha256"):
+        return []
+    changes = []
+    if old["sha256"] != new["sha256"]:
+        changes.append({"field": "rate_library.sha256", "category": "rate_library", "before": old["sha256"], "after": new["sha256"],
+                        "description": f"Selected rate library changed from SHA-256 {old['sha256']} to {new['sha256']}."})
+    old_rows, new_rows = old.get("rows", {}), new.get("rows", {})
+    for code in sorted(old_rows.keys() | new_rows.keys()):
+        old_row, new_row = old_rows.get(code), new_rows.get(code)
+        if old_row == new_row:
+            continue
+        parts = []
+        for field in ("rate", "unit", "currency", "source", "effective_date", "description", "notes"):
+            left, right = (row.get(field) if row else None for row in (old_row, new_row))
+            if left != right:
+                parts.append(f"{field.replace('_', ' ')} {_text(left)} to {_text(right)}")
+        changes.append({"field": f"rate_library.rows.{code}", "code": code, "category": "rate_library", "before": old_row, "after": new_row,
+                        "description": f"Rate library {code}: " + "; ".join(parts or ["entry changed"]) + "."})
+    return changes
+
+
+def _rate_facts(result: dict, row: dict | None) -> dict:
+    if row is None:
+        return {"origin": None, "source": None, "effective_date": None, "library_rate": None}
+    entry = _saved_library(result).get("rows", {}).get(row["code"], {})
+    origin = row.get("rate_origin")
+    if origin not in {"library", "override"}:
+        origin = "override" if row["code"] in _comparison_settings(result["settings"])["rate_overrides"] else None
+    return {"origin": origin, "source": row.get("rate_source", result["settings"].get("rate_source")),
+            "effective_date": row.get("rate_effective_date", result["settings"].get("rate_date")),
+            "library_rate": row.get("library_rate", entry.get("rate")),
+            "library_currency": row.get("library_currency", entry.get("currency", _saved_library(result).get("currency"))),
+            "library_source": entry.get("source"), "library_effective_date": entry.get("effective_date")}
+
+
+def _rate_bridge(before: dict, after: dict, old: dict | None, new: dict | None,
+                 quantity: Decimal, rate_effect: Decimal | None) -> dict:
+    facts_a, facts_b = _rate_facts(before, old), _rate_facts(after, new)
+    result = {"before_rate_origin": facts_a["origin"], "after_rate_origin": facts_b["origin"],
+              "before_rate_source": facts_a["source"], "after_rate_source": facts_b["source"],
+              "before_rate_effective_date": facts_a["effective_date"], "after_rate_effective_date": facts_b["effective_date"],
+              "before_library_rate": facts_a["library_rate"], "after_library_rate": facts_b["library_rate"],
+              "before_library_currency": facts_a.get("library_currency"), "after_library_currency": facts_b.get("library_currency"),
+              "library_rate_effect": None, "override_rate_effect": None, "unattributed_rate_effect": None,
+              "rate_bridge": None, "rate_change_cause": "No effective rate change"}
+    if rate_effect is None:
+        result["rate_change_cause"] = "Measurement unit changed; rate effects are not comparable"
+        return result
+    if old is None or new is None:
+        result.update(library_rate_effect=0.0, override_rate_effect=0.0, unattributed_rate_effect=0.0)
+        return result
+    foreign_bridge = facts_a["origin"] == "library" and facts_b.get("library_currency") != after["totals"]["currency"]
+    if facts_a["origin"] is None or facts_b["origin"] is None or facts_b["library_rate"] is None or foreign_bridge:
+        result.update(unattributed_rate_effect=_float(rate_effect), library_rate_effect=0.0, override_rate_effect=0.0,
+                      rate_change_cause=("Selected library currency differs from the design currency; no cross-currency rate bridge is inferred" if foreign_bridge else
+                                         "Effective rate changed; historical library/override attribution was not recorded"))
+        return result
+    old_rate, new_rate = old["rate"], new["rate"]
+    bridge = old_rate if facts_a["origin"] == "override" else _decimal(facts_b["library_rate"], "Saved library B rate")
+    library_effect = _rounded(quantity * (bridge - old_rate))
+    # Residual keeps the two-step bridge equal to the already rounded rate effect.
+    override_effect = rate_effect - library_effect
+    causes = []
+    if bridge != old_rate:
+        causes.append("selected library update")
+    if new_rate != bridge:
+        causes.append("explicit override edit or removal")
+    if (not causes and facts_a["origin"] == "override" and facts_a.get("library_rate") is not None
+            and facts_a.get("library_rate") != facts_b.get("library_rate")):
+        causes.append("selected library updated; the explicit override kept the effective rate unchanged")
+    elif not causes and facts_a["origin"] != facts_b["origin"]:
+        causes.append("explicit override origin changed without changing the effective rate")
+    result.update(library_rate_effect=_float(library_effect), override_rate_effect=_float(override_effect), unattributed_rate_effect=0.0,
+                  rate_bridge=_float(bridge), rate_change_cause=" and ".join(causes) or "No effective rate change")
+    return result
+
+
+def _provenance_rows(before: dict, after: dict, old_rows: dict, new_rows: dict, items: list[dict]) -> list[dict]:
+    affected = {item["code"]: item for item in items}
+    result = []
+    for code in dict.fromkeys([*old_rows, *new_rows]):
+        row = {"code": code}
+        for label, snapshot, source in (("before", before, old_rows), ("after", after, new_rows)):
+            item = source.get(code)
+            row[label] = ({**_rate_facts(snapshot, item), "rate": _float(item["rate"]), "unit": item["unit"],
+                           "currency": snapshot["totals"]["currency"]} if item else None)
+        row.update({key: affected.get(code, {}).get(key, 0.0 if key != "rate_change_cause" else "No effective rate change")
+                    for key in ("library_rate_effect", "override_rate_effect", "unattributed_rate_effect", "rate_bridge", "rate_change_cause")})
+        if code not in affected:
+            row["rate_bridge"] = None
+        result.append(row)
+    return result
+
+
+def _library_notes(comparison: dict) -> list[str]:
+    notes = []
+    for label, key in (("A", "before_rate_library"), ("B", "after_rate_library")):
+        library = comparison.get(key) or {}
+        if not library.get("sha256"):
+            notes.append(f"Rate library {label}: not recorded in the historical snapshot; source and effective dates are unknown.")
+            continue
+        notes.append(f"Rate library {label} SHA-256: {library['sha256']} | Library currency: {library.get('currency', 'Not recorded')}.")
+        groups: dict[tuple, list[str]] = {}
+        for code, item in sorted(library.get("rows", {}).items()):
+            groups.setdefault((item.get("source"), item.get("effective_date")), []).append(code)
+        for (source, effective_date), codes in groups.items():
+            notes.append(f"Library {label} source: {source or 'Not recorded'}; effective date: {effective_date or 'Not recorded'}; items: {', '.join(codes)}.")
+    return notes
+
+
+def _provenance_description(facts: dict | None) -> str:
+    if not facts:
+        return "No saved item."
+    source, date = facts.get("source") or "Not recorded", facts.get("effective_date") or "Not recorded"
+    library_rate = facts.get("library_rate")
+    rate_text = _text(library_rate) if library_rate is not None else "Not recorded"
+    if facts.get("origin") == "library":
+        return f"Library rate {_text(facts['rate'])} {facts['currency']}/{facts['unit']}. Source: {source}; effective date: {date}."
+    return (f"Applied {_text(facts['rate'])} {facts['currency']}/{facts['unit']}; origin {facts.get('origin') or 'Not recorded'}. "
+            f"Applied source: {source}; effective date: {date}. Selected library rate: {rate_text} {facts.get('library_currency') or 'Not recorded'}. "
+            f"Library source: {facts.get('library_source') or 'Not recorded'}; effective date: {facts.get('library_effective_date') or 'Not recorded'}.")
+
+
+def _provenance_pdf(comparison: dict, paragraph: Any, width: float, *, title_style: str, body_style: str, header_style: str) -> list[Any]:
+    if not comparison.get("rate_provenance"):
+        return []
+    content = [PageBreak(), paragraph("RATE LIBRARY AND OVERRIDE AUDIT", title_style)]
+    content.extend(paragraph(note, body_style) for note in _library_notes(comparison))
+    content.append(Spacer(1, 8))
+    rows = [[paragraph(value, header_style) for value in ("Item", "Revision A pricing basis", "Revision B pricing basis and cause")]]
+    for item in comparison["rate_provenance"]:
+        after_text = _provenance_description(item["after"])
+        if item["rate_change_cause"] != "No effective rate change":
+            after_text += f" Cause: {item['rate_change_cause']}."
+        if item.get("rate_bridge") is not None and any(item.get(key) for key in ("library_rate_effect", "override_rate_effect")):
+            after_text += (f" Bridge rate {_text(item['rate_bridge'])} {comparison['currency']}; library effect {_signed(item['library_rate_effect'])}; "
+                           f"override effect {_signed(item['override_rate_effect'])} {comparison['currency']}.")
+        rows.append([paragraph(item["code"], body_style), paragraph(_provenance_description(item["before"]), body_style), paragraph(after_text, body_style)])
+    table = Table(rows, colWidths=[90, (width - 90) / 2, (width - 90) / 2], repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + INK)),
+                              ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + PALE)]),
+                              ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 5),
+                              ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LINEBELOW", (0, 0), (-1, -1), 0.35, colors.HexColor("#D5E0E4"))]))
+    content.append(table)
+    return content
 
 
 
@@ -271,6 +428,7 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
     if currency != new_currency:
         raise ValueError("Choose revisions with the same currency. No currency conversion is applied.")
 
+    library_changes = _library_changes(before, after)
     old_settings, new_settings = (_flat(_comparison_settings(result["settings"]))
                                   for result in (before, after))
     ordered_fields = list(FIELD_LABELS) + sorted((old_settings.keys() | new_settings.keys()) - FIELD_LABELS.keys())
@@ -280,6 +438,8 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         if old == new:
             continue
         label, category = FIELD_LABELS.get(field, (field.replace("_", " ").capitalize(), "settings"))
+        if field.startswith("rate_overrides."):
+            label, category = f"Explicit rate override {field.split('.')[-1]}", "rates"
         suffix = " mm" if field.endswith("_mm") else ""
         setting_changes.append({"field": field, "label": label, "before": old, "after": new,
                                 "description": f"{label}: {_text(old)}{suffix} to {_text(new)}{suffix}.", "category": category})
@@ -325,6 +485,13 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
                 parts.append(f"description changed from '{old_description}' to '{new_description}'")
             if old["element_ids"] != new["element_ids"]:
                 parts.append("linked model elements changed")
+            old_facts, new_facts = _rate_facts(before, old), _rate_facts(after, new)
+            for field, label in (("origin", "rate origin"), ("source", "rate source"), ("effective_date", "rate effective date"),
+                                 ("library_rate", "selected library base rate")):
+                left, right = old_facts[field], new_facts[field]
+                # Additional provenance for a legacy row is not itself a change.
+                if left is not None and right is not None and left != right:
+                    parts.append(f"{label} {_text(left)} to {_text(right)}")
             if not parts:
                 # Extra snapshot fields do not imply a design or price change.
                 continue
@@ -350,6 +517,7 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
             "quantity_effect": _float(quantity_effect) if quantity_effect is not None else None,
             "rate_effect": _float(rate_effect) if rate_effect is not None else None,
             "rounding_effect": _float(rounding_effect) if rounding_effect is not None else None,
+            **_rate_bridge(before, after, old, new, new_quantity, rate_effect),
             "status": status, "element_ids": sorted(set((old or {}).get("element_ids", []) + (new or {}).get("element_ids", []))),
         })
 
@@ -364,6 +532,8 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
     }
     for key in ("quantity_effect", "rate_effect", "rounding_effect"):
         totals[key] = _float(sum((Decimal(str(item[key])) for item in items), ZERO)) if comparable else None
+    for key in ("library_rate_effect", "override_rate_effect", "unattributed_rate_effect"):
+        totals[key] = _float(sum((Decimal(str(item[key])) for item in items), ZERO)) if comparable else None
     notes = [
         "This is the estimated difference between saved, modelled BOQ snapshots. Unit rates are illustrative unless replaced with project rates.",
         "Cost increases and decreases include quantity, rate and scope changes. A colour or description change can have zero cost at the saved rates.",
@@ -372,6 +542,7 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         "Added and removed items are assigned to the quantity/scope effect. A changed measurement unit has no quantity/rate decomposition.",
         "Only affected BOQ items are listed; project totals include the complete saved BOQ. Omissions are positive absolute cost decreases or credits.",
         "Historical amounts, currencies and scope are preserved. Newly introduced trades are scope additions when absent from revision A; defaults alone do not change saved inputs.",
+        "Rate attribution first applies library B while retaining override A, then applies override B. The library effect is rounded first; the override residual reconciles to the rounded total rate effect. Unknown historical provenance remains unattributed.",
         "Demolition, abortive work, rework, fees, preliminaries, taxes and programme/time effects are excluded unless separately modelled and priced. This report is not an approved contract variation.",
     ]
     return {
@@ -380,8 +551,12 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         "after_label": after["settings"].get("project_name", "Revision B"),
         "before_created_at": before.get("created_at"), "after_created_at": after.get("created_at"),
         "currency": currency, "setting_changes": setting_changes, "items": items, "totals": totals,
-        "summary": [item["description"] for item in setting_changes] or [item["description"] for item in items],
-        "has_changes": bool(setting_changes or items), "notes": notes,
+        "design_changes": [item for item in setting_changes if item["category"] not in {"rates", "pricing"}],
+        "pricing_changes": [item for item in setting_changes if item["category"] in {"rates", "pricing"}],
+        "library_changes": library_changes, "before_rate_library": _saved_library(before), "after_rate_library": _saved_library(after),
+        "rate_provenance": _provenance_rows(before, after, old_rows, new_rows, items),
+        "summary": [item["description"] for item in [*setting_changes, *library_changes]] or [item["description"] for item in items],
+        "has_changes": bool(setting_changes or library_changes or items), "notes": notes,
     }
 
 
@@ -391,6 +566,46 @@ def _safe_cell(value: Any) -> Any:
 
 def _signed(value: float | None) -> str:
     return "n/a" if value is None else f"{value:+,.2f}" if value else "0.00"
+
+
+def _provenance_xlsx(workbook: Workbook, comparison: dict) -> None:
+    sheet = workbook.create_sheet("Rate provenance")
+    sheet.sheet_view.showGridLines = False
+    sheet.append(["Saved rate library and override audit"])
+    sheet.merge_cells("A1:C1")
+    sheet.row_dimensions[1].height = 30
+    for note in _library_notes(comparison):
+        sheet.append([_safe_cell(note)])
+        sheet.merge_cells(start_row=sheet.max_row, start_column=1, end_row=sheet.max_row, end_column=3)
+        sheet.row_dimensions[sheet.max_row].height = max(30, 14 * (len(note) // 180 + 1))
+    sheet.append(["Item", "Revision A pricing basis", "Revision B pricing basis and rate cause"])
+    header = sheet.max_row
+    for cell in sheet[header]:
+        cell.fill = PatternFill("solid", fgColor=INK)
+        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    for item in comparison.get("rate_provenance", []):
+        after_text = _provenance_description(item["after"]) + f" Cause: {item['rate_change_cause']}."
+        if item.get("rate_bridge") is not None:
+            after_text += (f" Bridge {_text(item['rate_bridge'])} {comparison['currency']}; library effect {_signed(item['library_rate_effect'])}; "
+                           f"override effect {_signed(item['override_rate_effect'])}; unattributed effect {_signed(item['unattributed_rate_effect'])} {comparison['currency']}.")
+        before_text = _provenance_description(item["before"])
+        sheet.append([_safe_cell(item["code"]), _safe_cell(before_text), _safe_cell(after_text)])
+        sheet.row_dimensions[sheet.max_row].height = min(409, max(48, 14 * (max(len(before_text), len(after_text)) // 87 + 1) + 10))
+    for row in sheet:
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            if cell.row != header:
+                cell.font = Font(name="Calibri", size=14 if cell.row == 1 else 10, bold=cell.row == 1)
+    for column, width in {"A": 23, "B": 95, "C": 95}.items():
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = f"B{header + 1}"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_area = f"A1:C{sheet.max_row}"
+    sheet.print_title_rows = f"{header}:{header}"
 
 
 def _xlsx(comparison: dict, directory: Path) -> None:
@@ -491,6 +706,7 @@ def _xlsx(comparison: dict, directory: Path) -> None:
     sheet.print_area = f"A1:M{row - 1}"
     sheet.oddFooter.center.text = f"A {comparison['before_revision']} to B {comparison['after_revision']}"
     workbook.calculation = CalcProperties(fullCalcOnLoad=True)
+    _provenance_xlsx(workbook, comparison)
     workbook.save(directory / "changes.xlsx")
 
 
@@ -502,12 +718,21 @@ def _csv(comparison: dict, directory: Path) -> None:
         writer.writerow(["Description of changes"])
         for description in comparison["summary"] or ["No design, description or cost changes."]:
             writer.writerow([_safe_cell(description)])
-        keys = ["code", "description", "before_unit", "after_unit", "before_quantity", "after_quantity", "before_rate", "after_rate", "before_amount", "after_amount", "cost_delta", "quantity_effect", "rate_effect", "rounding_effect", "status", "element_ids"]
+        for note in _library_notes(comparison):
+            writer.writerow(["Rate library", _safe_cell(note)])
+        keys = ["code", "description", "before_unit", "after_unit", "before_quantity", "after_quantity", "before_rate", "after_rate", "before_amount", "after_amount", "cost_delta", "quantity_effect", "rate_effect", "rounding_effect", "status", "element_ids",
+                "before_rate_origin", "after_rate_origin", "before_rate_source", "after_rate_source", "before_rate_effective_date", "after_rate_effective_date",
+                "before_library_rate", "after_library_rate", "before_library_currency", "after_library_currency", "rate_bridge", "rate_change_cause",
+                "library_rate_effect", "override_rate_effect", "unattributed_rate_effect"]
         writer.writerow(keys)
         for item in comparison["items"]:
             writer.writerow([_safe_cell(", ".join(item[key]) if key == "element_ids" else item[key]) for key in keys])
         for note in comparison["notes"]:
             writer.writerow(["Note", note])
+        writer.writerow(["All saved rate provenance", "Item", "Revision A", "Revision B", "Cause"])
+        for item in comparison.get("rate_provenance", []):
+            writer.writerow(["Rate provenance", _safe_cell(item["code"]), _safe_cell(_provenance_description(item["before"])),
+                             _safe_cell(_provenance_description(item["after"])), _safe_cell(item["rate_change_cause"])])
 
 
 def _pdf(comparison: dict, directory: Path) -> None:
@@ -549,8 +774,11 @@ def _pdf(comparison: dict, directory: Path) -> None:
     effects = comparison["totals"]
     story.append(KeepTogether([
         paragraph(f"Quantity/scope effect: {_signed(effects['quantity_effect'])}; rate effect: {_signed(effects['rate_effect'])}; rounding adjustment: {_signed(effects['rounding_effect'])} {comparison['currency']}.", "ChangeSmall"),
+        paragraph(f"Rate effect attribution: library {_signed(effects.get('library_rate_effect'))}; overrides {_signed(effects.get('override_rate_effect'))}; unattributed {_signed(effects.get('unattributed_rate_effect'))} {comparison['currency']}.", "ChangeSmall"),
         *(paragraph(note, "ChangeSmall") for note in comparison["notes"]),
     ]))
+    story.extend(_provenance_pdf(comparison, paragraph, landscape(A4)[0] - 72,
+                                 title_style="ChangeTitle", body_style="ChangeSmall", header_style="ChangeHeader"))
 
     def footer(canvas, document):
         canvas.saveState()
@@ -652,8 +880,11 @@ def _variation_pdf(comparison: dict, directory: Path) -> None:
         f"Net of affected items: {_signed(totals['net_change'])} {currency}. Baseline estimate {totals['before']:,.2f} + additions {totals['additions']:,.2f} - omissions {totals['omissions']:,.2f} = revised estimate {totals['after']:,.2f} {currency}.", "VOBody")])
     story.append(KeepTogether([
         paragraph("Valuation basis and qualifications", "VOHeading"),
+        paragraph(f"Rate effect attribution: library {_signed(totals.get('library_rate_effect'))}; overrides {_signed(totals.get('override_rate_effect'))}; unattributed {_signed(totals.get('unattributed_rate_effect'))} {currency}.", "VOSmall"),
         *(paragraph(note, "VOSmall") for note in comparison["notes"]),
     ]))
+    story.extend(_provenance_pdf(comparison, paragraph, width,
+                                 title_style="VOTitle", body_style="VOSmall", header_style="VOHeader"))
 
     def footer(canvas, document):
         canvas.saveState()

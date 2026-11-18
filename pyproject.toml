@@ -46,6 +46,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["homespec", "housesync"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"rates/rates_aud.csv" = "housesync/rate_data/rates_aud.csv"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
