@@ -3,6 +3,26 @@ export const HOSTS = Object.freeze(['W1', 'W2', 'W3', 'W4']);
 export const HOST_LABELS = Object.freeze({ W1: 'south', W2: 'east', W3: 'north', W4: 'west' });
 const EPSILON = 1e-6;
 
+export const RATE_DEFAULTS = Object.freeze({
+  floor_m2: 95, wall_m3: 380, roof_m2: 145, paint_m2: 9, opening_each: 650,
+  floor_finish_m2: 65, ceiling_m2: 45, skirting_m: 18, internal_plaster_m2: 28, external_render_m2: 40,
+});
+export const WASTAGE_DEFAULTS = Object.freeze({
+  floor: 0, wall: 0, roof: 0, paint: 0, door: 0, window: 0,
+  floor_finish: 10, ceiling: 5, skirting: 10, internal_plaster: 5, external_render: 5,
+});
+export const RATE_SOURCE_DEFAULT = 'Illustrative AUD rates, not a tender estimate; no supplier quotes';
+export const RATE_DATE_DEFAULT = '2026-11-17';
+
+/** Fill absent pricing fields without replacing historical currency or entered rates. */
+export function normalizeBoqSettings(settings) {
+  return {
+    ...settings, currency: settings.currency ?? 'AUD', paint_coats: settings.paint_coats ?? 2,
+    rates: { ...RATE_DEFAULTS, ...settings.rates }, wastage: { ...WASTAGE_DEFAULTS, ...settings.wastage },
+    rate_source: settings.rate_source ?? RATE_SOURCE_DEFAULT, rate_date: settings.rate_date ?? RATE_DATE_DEFAULT,
+  };
+}
+
 function copy(value) {
   if (Array.isArray(value)) return value.map(copy);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)]));
@@ -145,7 +165,7 @@ const location = (settings, opening) => opening.host + ' (' + (HOST_LABELS[openi
 
 export function describeChanges(before, after) {
   if (!before || !after) return [];
-  const a = cloneSettings(before), b = cloneSettings(after);
+  const a = normalizeBoqSettings(cloneSettings(before)), b = normalizeBoqSettings(cloneSettings(after));
   const descriptions = [];
   for (const [key, name] of [['length_mm', 'Internal length'], ['width_mm', 'Internal width'], ['height_mm', 'Wall height'], ['wall_thickness_mm', 'Wall thickness']]) {
     if (!same(a[key], b[key])) descriptions.push(name + ': ' + format(a[key]) + ' to ' + format(b[key]) + ' mm.');
@@ -171,6 +191,12 @@ export function describeChanges(before, after) {
   }
   const rates = new Set([...Object.keys(a.rates || {}), ...Object.keys(b.rates || {})]);
   for (const key of rates) if (!same(a.rates?.[key], b.rates?.[key])) descriptions.push(key.replaceAll('_', ' ') + ' rate: ' + format(a.rates?.[key]) + ' to ' + format(b.rates?.[key]) + '.');
+  if (!same(a.paint_coats, b.paint_coats)) descriptions.push('Paint coats: ' + format(a.paint_coats) + ' to ' + format(b.paint_coats) + '.');
+  const wastage = new Set([...Object.keys(a.wastage), ...Object.keys(b.wastage)]);
+  for (const key of wastage) if (!same(a.wastage[key], b.wastage[key])) descriptions.push(key.replaceAll('_', ' ') + ' wastage: ' + format(a.wastage[key]) + '% to ' + format(b.wastage[key]) + '%.');
+  for (const [key, label] of [['rate_source', 'Rate source'], ['rate_date', 'Rate date']]) {
+    if (a[key] !== b[key]) descriptions.push(label + ': ' + a[key] + ' to ' + b[key] + '.');
+  }
   return descriptions;
 }
 

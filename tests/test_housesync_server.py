@@ -7,6 +7,7 @@ import json
 import threading
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -90,6 +91,28 @@ def test_restart_reuses_current_sources_and_rebuilds_changed_sources(tmp_path, f
     assert refreshed["settings"] == settings.model_dump(mode="json")
     assert len(fake_exports["builds"]) == 2
     assert (tmp_path / original["revision"] / "result.json").is_file()
+
+
+def test_schema_default_changes_invalidate_comparison_cache_without_rewriting_reports(tmp_path, fake_exports, monkeypatch):
+    application = server.Application(tmp_path)
+    first = application.build(HouseSettings())
+    second = application.build(HouseSettings(length_mm=12000))
+    report = application.compare(first["revision"], second["revision"])
+    old_report = application.changes_root / report["comparison_id"] / "comparison.json"
+    old_bytes = old_report.read_bytes()
+    read_bytes = Path.read_bytes
+    schema_path = Path(server.__file__).with_name("schema.py")
+
+    def changed_defaults(path):
+        original = read_bytes(path)
+        return original + b"\n# Changed validated defaults\n" if path == schema_path else original
+
+    monkeypatch.setattr(Path, "read_bytes", changed_defaults)
+    refreshed = application.compare(first["revision"], second["revision"])
+    assert refreshed["comparison_id"] != report["comparison_id"]
+    assert refreshed["totals"] == report["totals"]
+    assert old_report.read_bytes() == old_bytes
+    assert len(list(application.changes_root.glob("*/comparison.json"))) == 2
 
 
 def test_failed_export_preserves_last_successful_revision(tmp_path, fake_exports):
@@ -201,7 +224,7 @@ def test_build_captures_a_to_b_cost_and_description_without_rewriting_snapshots(
     assert envelope["previous_revision"] == before["revision"]
     assert comparison["before_revision"] == before["revision"]
     assert comparison["after_revision"] == after["revision"]
-    assert comparison["totals"]["net_change"] == 1280
+    assert comparison["totals"]["net_change"] == 1520
     assert any("Warm white" in item["description"] for item in comparison["setting_changes"])
     paint = next(item for item in comparison["items"] if item["code"] == "PAINT")
     assert paint["cost_delta"] == 0
@@ -218,8 +241,8 @@ def test_switching_to_a_saved_revision_records_a_credit(tmp_path, fake_exports):
     restored = application.build(HouseSettings())
     report = application.envelope(restored)["last_change"]
     assert len(fake_exports["builds"]) == 2
-    assert report["totals"]["net_change"] == -1280
-    assert report["totals"]["omissions"] == 1280
+    assert report["totals"]["net_change"] == -1520
+    assert report["totals"]["omissions"] == 1520
     assert report["totals"]["additions"] == 0
 
 
@@ -250,7 +273,7 @@ def test_http_compare_and_report_downloads_reconcile(http_application):
     status, body, _ = request("GET", f"/api/compare?before={before['revision']}&after={after['revision']}")
     assert status == 200
     report = json.loads(body)
-    assert report["totals"]["after"] - report["totals"]["before"] == report["totals"]["net_change"] == 1280
+    assert report["totals"]["after"] - report["totals"]["before"] == report["totals"]["net_change"] == 1520
     assert {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json", "variation_pdf"} == set(report["files"])
     for url in report["files"].values():
         status, content, _ = request("GET", url)
@@ -264,7 +287,7 @@ def test_http_compare_and_report_downloads_reconcile(http_application):
     status, body, _ = request("GET", "/api/revisions")
     assert status == 200
     revisions = json.loads(body)
-    assert all(item["currency"] == "SGD" and item["subtotal"] > 0 for item in revisions)
+    assert all(item["currency"] == "AUD" and item["subtotal"] > 0 for item in revisions)
     assert len(list(application.changes_root.glob("*/comparison.json"))) == 1
 
 

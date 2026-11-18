@@ -7,10 +7,10 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 ## First version
 
 - A single-storey, single-room rectangular shell with a flat roof; one door and two windows by default.
-- Editable clear internal length/width, wall height/thickness, paint name/colour, currency, and five illustrative unit rates.
+- Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, ten illustrative unit rates, per-item wastage, and rate source/date.
 - A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
-- BOQ in Excel/CSV; technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
+- Eleven BOQ items in Excel/CSV, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage and gross priced quantity remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
@@ -33,9 +33,9 @@ Every successful update preserves the previous design and automatically creates 
 
 Select **Export variation order PDF** to download a draft variation order for the selected A-to-B comparison. It includes a VO reference, source revisions, change descriptions, itemised quantities/rates and costs, additions/omissions, the net variation and revised estimate, plus contract reference and approval/signature fields. Exporting leaves the order as a draft for review and approval; it does not approve a variation or assess programme impact.
 
-The default 10 x 8 m design has an illustrative subtotal of SGD 28,574.80. Increasing its length to 12 m at the same rates gives SGD 33,022.80, a **SGD 4,448.00 increase**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
-The comparison separates quantity effects from rate effects and reconciles them to rounded BOQ amounts. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
+The comparison separates gross quantity effects (including coat count and wastage changes) from rate effects and reconciles them to rounded BOQ amounts. Missing new settings in older designs receive defaults when loaded and compared; saved revision BOQs and amounts remain immutable. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
 
 ## Run on Windows
 
@@ -55,15 +55,52 @@ On macOS/Linux use `.venv/bin/python -m housesync.server --open` after the same 
 
 ## A change you can verify
 
-The default house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. Its compiled floor area is **80 m2**, net wall volume **20.94 m3**, painted area **209.4 m2**, and flat roof area **99 m2**. The illustrative subtotal is **SGD 28,574.80**.
+The default house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. One 1.0 x 2.1 m door and two 1.5 x 1.2 m windows deduct **5.7 m2** from each set of wall faces. These hand calculations check the compiled model quantities:
 
-Changing only the length to 12 m increases the clear floor area to **96 m2** and painted wall area to **233.4 m2**. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Rates can be edited independently.
+| Measured quantity | Default 10 x 8 m | Length changed to 12 x 8 m |
+|---|---:|---:|
+| Clear floor / floor finish / ceiling area | 80.000 m2 | 96.000 m2 |
+| Net wall volume | 20.940 m3 | 23.340 m3 |
+| Flat roof area, including overhang | 99.000 m2 | 117.000 m2 |
+| Skirting: clear internal perimeter less door widths | 35.000 m | 39.000 m |
+| Internal plaster/render: internal perimeter x height less openings | 102.300 m2 | 114.300 m2 |
+| External render: external perimeter x height less openings | 107.100 m2 | 119.100 m2 |
+| Net paint area: internal plus external wall faces | 209.400 m2 | 233.400 m2 |
+| Painted quantity at 2 coats, before wastage | 418.800 m2 | 466.800 m2 |
+
+For example, the default internal wall faces are `2 x (10 + 8) x 3 - 5.7 = 102.3 m2`. The external faces use the 10.4 x 8.4 m external footprint: `2 x (10.4 + 8.4) x 3 - 5.7 = 107.1 m2`. Skirting is `2 x (10 + 8) - 1.0 = 35 m`. These equations are independent checks; production quantities come from the compiled model.
+
+| BOQ item | Default rate (AUD/unit) | Default wastage | 10 x 8 m amount (AUD) | 12 x 8 m amount (AUD) | Change (AUD) |
+|---|---:|---:|---:|---:|---:|
+| Floor slab, m2 | 95.00 | 0% | 7,600.00 | 9,120.00 | +1,520.00 |
+| Masonry walls, m3 | 380.00 | 0% | 7,957.20 | 8,869.20 | +912.00 |
+| Flat roof, m2 | 145.00 | 0% | 14,355.00 | 16,965.00 | +2,610.00 |
+| Wall painting, m2 per coat | 9.00 | 0% | 3,769.20 | 4,201.20 | +432.00 |
+| Door allowance, each | 650.00 | 0% | 650.00 | 650.00 | 0.00 |
+| Window allowance, each | 650.00 | 0% | 1,300.00 | 1,300.00 | 0.00 |
+| Floor finish, m2 | 65.00 | 10% | 5,720.00 | 6,864.00 | +1,144.00 |
+| Ceiling, m2 | 45.00 | 5% | 3,780.00 | 4,536.00 | +756.00 |
+| Skirting, m | 18.00 | 10% | 693.00 | 772.20 | +79.20 |
+| Internal plaster/render, m2 | 28.00 | 5% | 3,007.62 | 3,360.42 | +352.80 |
+| External render, m2 | 40.00 | 5% | 4,498.20 | 5,002.20 | +504.00 |
+| **Subtotal** | | | **53,330.22** | **61,640.22** | **+8,310.00** |
+
+The shared opening rate covers both door and window allowances. Changing only the paint colour updates the model and finish descriptions while preserving measured quantities. Coat count, each item's wastage and rates can be edited independently.
 
 ## Measurement and document scope
 
-Model dimensions are in millimetres; browser geometry is in metres. Drawings distinguish internal clear dimensions from external overall dimensions. Wall corners are counted once. Painting includes internal and external net vertical faces, deducting all modelled opening voids on both faces. Reveals, wastage, coat multipliers and floor/roof paint are excluded. The roof includes a 300 mm overhang. Door/window rows share an illustrative allowance per opening.
+Model dimensions are in millimetres; browser geometry is in metres. Drawings distinguish internal clear dimensions from external overall dimensions. Wall corners are counted once. All take-off quantities are derived from compiled geometry, including hosted opening dimensions:
 
-This is a concept application. The BOQ covers modelled items and illustrative rates, not a complete tender estimate. The specification is a technical schedule for development alongside a contract, not a complete contract. Structure, foundations, drainage, services, waterproofing, statutory compliance, workmanship systems and supplier rates require project-specific development. The demonstration does not claim that homespec's building guideline or regulatory checks have been run.
+- Floor finish and ceiling use the clear internal room area. Ceiling is an area allowance over that footprint; no ceiling framing or suspended system is modelled.
+- Skirting uses the clear internal perimeter minus every modelled door width; windows do not reduce it.
+- Internal plaster/render and external render use their respective net vertical wall faces and deduct all modelled door/window opening voids. They are separate trades from the structural masonry volume.
+- Painting uses both sets of net wall faces. The description retains the measured net area; the editable coat count defaults to **2**. `Net painted quantity = measured area x coats`. Ceiling, floor, roof, reveals, sills and soffits are excluded from painting.
+- Each BOQ item has an editable wastage percentage. `Gross quantity = net quantity x (1 + wastage / 100)` and `Amount = gross quantity x rate`, rounded half-up to cents per row. Paint defaults to 0% wastage, with coats applied separately. Wastage is a pricing allowance, not a change to model dimensions.
+- The roof includes a 300 mm overhang. Door/window rows count parent products once, excluding emitted frame, leaf and glazing parts.
+
+New designs default to **AUD**. Rates are labelled **illustrative AUD rates, not a tender estimate**; they are demonstration inputs, not supplier quotes or market research. The editable rate source and rate date fields identify the pricing basis; the demonstration date is **2026-11-17**. Loading an old design preserves its explicit rates and currency, and fills omitted new fields with defaults. No currency conversion is inferred, and revisions in different currencies cannot be compared.
+
+The BOQ now includes the slab, masonry, flat roof, opening allowances and five finishing trades with wall painting. It remains a concept estimate: taxes, preliminaries, foundations, reinforcement, drainage, services, waterproofing, demolition/rework, fees and programme effects are excluded. Product systems, preparation, thicknesses for finishing layers, construction details and regulatory performance require project-specific selections. The specification is a draft technical schedule for development alongside a contract. The demonstration does not claim that homespec's building guideline or regulatory checks have been run.
 
 ## Files and development
 
@@ -80,13 +117,15 @@ This is a concept application. The BOQ covers modelled items and illustrative ra
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py -q
-.venv\Scripts\ruff.exe check housesync
-node --check housesync/static/app.js
-node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py -q
+.venv\Scripts\ruff.exe check .
+Get-ChildItem housesync/static -Filter *.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor.test.mjs
 ~~~
 
 Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Linux/macOS use build123d 0.11, preserving the advanced geometry API and Python 3.13 compatibility used by the upstream test suite.
+
+The AUD BOQ expansion was verified with **127 House Sync Python tests and 32 JavaScript tests passing**, repository-wide Ruff, syntax checks for every browser JavaScript file, compiled fractional-dimension/opening regression cases, rendered PDF reviews and spreadsheet recalculation. The wider non-Blender suite has 20 existing Windows issues, all reproduced on unchanged `main`: seven symlink privilege failures, twelve advanced geometry/profile/roof failures and one retained-camera source hash mismatch. These are not counted as passes. Blender integration was not run locally.
 
 The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
 

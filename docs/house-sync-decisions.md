@@ -42,13 +42,13 @@ The first version has a global paint name and HEX selection, defaulting to Light
 
 Entities: W1, W2, W3, W4, S0, R0, D1, N1, N2, ROOM1
 
-Wall volume comes from the final compiled solids after opening cuts. For this uniform rectangular shell, equivalent net wall area is volume divided by thickness and the combined internal/external net face area is twice that value. Paint excludes reveals, sills, soffits, floor/roof paint, waste, and coat multipliers. Parent door/window products are counted once; their generated parts are not separate openings. These rules must be revisited before supporting nonuniform walls or more complex geometry.
+**Historical basis; D-017 supersedes the paint exclusions and extends the trade measurements.** Wall volume comes from the final compiled solids after opening cuts. For this uniform rectangular shell, equivalent net wall area is volume divided by thickness and the combined internal/external net face area is twice that value. Paint excludes reveals, sills, soffits, floor/roof paint, waste, and coat multipliers. Parent door/window products are counted once; their generated parts are not separate openings. These rules must be revisited before supporting nonuniform walls or more complex geometry.
 
 ## D-008 Keep prices explicit and illustrative
 
 Entities: W1, W2, W3, W4, S0, R0, D1, N1, N2
 
-The six BOQ items use five editable rates: floor per m2, wall per m3, roof per m2, paint per m2, and one shared allowance per door/window. The currency defaults to SGD. Rates do not represent quotations. The subtotal excludes taxes, preliminaries, foundations, services, and unmodelled work. Separate door/window products and project rate sources are planned.
+**Historical basis; D-017 supersedes the item count, default currency and pricing settings.** The six BOQ items use five editable rates: floor per m2, wall per m3, roof per m2, paint per m2, and one shared allowance per door/window. The currency defaults to SGD. Rates do not represent quotations. The subtotal excludes taxes, preliminaries, foundations, services, and unmodelled work. Separate door/window products and project rate sources are planned.
 
 ## D-009 Generate all outputs from one compiled result
 
@@ -103,3 +103,19 @@ Entities: W1, W2, W3, W4, ROOM1
 Doors/windows retain stable D/N identifiers and explicit hosts. Opening starts use the inner reference direction: W1 eastwards, W2 northwards, W3 westwards and W4 southwards. A null start means automatic centring; fixed starts remain fixed when a wall grows. The compiler receives the host-relative start with the corner return allowance on W1/W3. At least 100 mm is required at each inner end, above the opening and between openings on one host. These are concept editing constraints. The application rejects invalid fits instead of silently relocating or shrinking the opening.
 
 The BOQ, specification and plan/elevation schedules use the compiled opening dimensions and IDs. Per-ID change descriptions record additions, removals, moves and size/sill edits, including zero-cost changes. Omitted opening arrays in old saved designs resolve to the original three defaults. Access, structure, door approach zones, circulation, furniture and regulatory suitability require separate project review.
+
+## D-017 Extend geometry take-off to finishing trades and AUD pricing
+
+Entities: ROOM1, W1, W2, W3, W4, S0, R0, and all compiled door/window products.
+
+This decision supersedes the limited trade/paint measurement scope in D-007 and the six-item SGD defaults in D-008. The existing clear dimensions, corner ownership, stable element IDs and compiled geometry authority remain unchanged.
+
+Floor finish and ceiling use compiled clear internal room area. Skirting uses compiled internal perimeter less compiled door opening widths. Internal plaster/render and external render are measured from exact compiled STEP wall faces clipped to the internal room and external shell boundary planes, after opening deductions. This excludes buried corner tabs while retaining exposed corner returns; rounded viewer OBJ coordinates are unsuitable for take-off. Combined internal/external net wall faces remain the measured paint area. Production take-off reads compiled geometry rather than hard-coded sample quantities or a separate browser calculation. Ceiling and finishes are quantity allowances against the shell geometry; this decision does not introduce ceiling framing, finish-layer assemblies or construction system design.
+
+The default 10 x 8 m shell measures 80 m2 floor finish/ceiling, 35 m skirting, 102.3 m2 internal plaster/render and 107.1 m2 external render. The measured paint area is 209.4 m2. The editable coat count defaults to 2, giving a net painted quantity of 418.8 m2; descriptions retain the underlying measured net area. Reveals, sills, soffits, and floor/roof/ceiling paint remain excluded.
+
+Each of the eleven BOQ rows exposes net quantity, wastage percentage and gross quantity. Painting applies coats before wastage. Gross quantity is net quantity multiplied by `1 + wastage / 100`, rounded half-up to six decimal places, and the row amount is gross quantity multiplied by rate, rounded half-up to two decimal places. Default wastage is 10% floor finish/skirting, 5% ceiling/internal plaster/external render and 0% elsewhere, including paint. Changes to coats or wastage alter priced quantities without modifying the geometry.
+
+New designs default to AUD, with ten editable rates and a shared door/window allowance. The source label is **illustrative AUD rates, not a tender estimate**; no supplier quotes are invented. Validated editable rate source and date fields retain the pricing basis, with 2026-11-17 as the demonstration date. At default rates, coats and wastage, the 10 x 8 m subtotal is AUD 53,330.22 and the 12 x 8 m subtotal AUD 61,640.22. Taxes, preliminaries, foundations, services and all other unmodelled scope remain excluded.
+
+Omitted new settings in old design inputs receive defaults. Comparison normalises those omitted settings before identifying changes, while retaining saved BOQ rows and totals as the authority. Previously issued snapshots are not silently repriced, recast into AUD, or rewritten. Quantity effects use gross priced quantities at the original rate; rate effects use the new gross quantity. Rounding still reconciles to the recorded item amounts. Comparing revisions in different currencies remains refused without an explicit conversion policy.

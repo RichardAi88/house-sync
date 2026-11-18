@@ -15,9 +15,9 @@ The demonstration is a single rectangular room shell, as a concept house. Defaul
 | Roof | 200 mm flat roof with 300 mm overhang beyond the external wall faces |
 | Doors | Editable hosted openings; default D1 is centred on the south wall, 1,000 x 2,100 mm |
 | Windows | Editable hosted openings; defaults N1/N2 are centred north/east, 1,500 x 1,200 mm with 900 mm sill |
-| Editable settings | House dimensions, finish, rates, plus stable-ID doors/windows with host, start, width, height and sill |
+| Editable settings | House dimensions, finish, paint coats, ten unit rates, per-item wastage, currency and rate source/date; stable-ID doors/windows with host, start, width, height and sill |
 | Plan and browser model | Direct constrained plan edits, snapping, undo/redo and draft review; compiled 3D view |
-| BOQ | Six priced items exported to Excel and CSV |
+| BOQ | Eleven items exported to Excel and CSV, with net quantities, wastage and gross priced quantities |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
 | Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |
@@ -39,16 +39,23 @@ The local server and browser interface integrate these components. The README co
 
 | Quantity | Rule |
 | --- | --- |
-| Floor area | Clear internal room area; the demonstration slab uses the same footprint |
+| Floor slab, floor finish and ceiling area | Compiled clear internal room area; ceiling is a footprint allowance without a separate ceiling assembly |
 | Wall volume | Final compiled wall volume after opening cuts; corner returns counted once |
-| Equivalent net wall area | Wall volume divided by wall thickness, valid for this uniform rectangular shell |
-| Paint area | Both internal and external net vertical wall faces, calculated as twice the equivalent net wall area |
+| Equivalent net wall area | Wall volume divided by wall thickness, retained for the uniform rectangular shell |
+| Skirting | Compiled internal room perimeter minus the widths of compiled door openings |
+| Internal plaster/render | Net internal vertical wall faces, deducting compiled opening voids |
+| External render | Net external vertical wall faces, deducting compiled opening voids |
+| Measured paint area | Combined internal and external net vertical wall faces; excludes reveals, sills, soffits and floor/roof/ceiling painting |
 | Roof area | Compiled flat roof top surface, including the 300 mm overhang |
-| Door/window counts | Parent products only; emitted frame, leaf, and glazing parts do not add products |
+| Door/window counts | Parent products only; emitted frame, leaf and glazing parts do not add products |
 
-Paint quantities exclude reveals, sills, soffits, floor/roof paint, waste, and coat multipliers. The five rate inputs cover floor area, wall volume, roof area, paint area, and a shared allowance per door/window. Rates are illustrative, with SGD as the default currency. Taxes, preliminaries, foundations, services, and unmodelled work are excluded from the subtotal.
+The paint quantity applies an editable coat multiplier, default 2, to the measured net paint area. Each BOQ item records net quantity, wastage percentage and gross quantity; pricing uses the gross quantity. Default wastage is 10% for floor finish/skirting, 5% for ceiling/internal plaster/external render, and 0% for the existing items, including paint. Coat count does not alter the measured wall area or geometry.
 
-For the default geometry, check quantities are 80.000 m2 internal floor area, 20.940 m3 net wall volume, 209.400 m2 paint area, 99.000 m2 roof area, one door, and two windows. With the default illustrative rates, the subtotal is SGD 28,574.80.
+New designs default to AUD. The ten rate inputs cover slab, wall volume, roof, paint per coat, a shared allowance per door/window, floor finish, ceiling, skirting, internal plaster/render and external render. They are **illustrative AUD rates, not a tender estimate** and do not represent supplier quotes. The editable rate source/date fields record provenance; the demonstration date is 2026-11-17. Taxes, preliminaries, foundations, services and unmodelled work remain excluded.
+
+For the default geometry, check quantities are 80.000 m2 clear floor/finish/ceiling area, 20.940 m3 net wall volume, 35.000 m skirting, 102.300 m2 internal plaster/render, 107.100 m2 external render, 209.400 m2 measured paint area (418.800 m2 at two coats), 99.000 m2 roof area, one door and two windows. At default wastage and rates, the subtotal is **AUD 53,330.22**. Increasing the length to 12 m gives **AUD 61,640.22**, a difference of **AUD 8,310.00**; the README contains the itemised worked example.
+
+Older design inputs load omitted settings with defaults while retaining explicitly saved rates and currency. Missing defaults do not create settings-only variations. Saved revision BOQs are never repriced or rewritten; comparisons still use their recorded amounts and reject different currencies. Coat or wastage edits affect the quantity component, while rate edits affect the rate component of the reconciled A-to-B comparison.
 
 ## Verification completed during setup
 
@@ -66,7 +73,8 @@ The DOCX package and contents passed structural tests. Visual DOCX rendering was
 | Multiple rooms | Internal partitions, room boundaries, room schedules, and reliable junction quantities |
 | Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
 | Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
-| Project rates | Separate item rates, supplier quotations, location/currency context, taxes, waste, and revision dates |
+| Implemented: finishing trades and AUD allowances | Five finishing trades, editable coats/wastage, AUD defaults and rate source/date metadata |
+| Project rates | Supplier quotation integration, separate door/window product rates, location context and taxes remain |
 | Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
 | Further CAD editing | Arbitrary wall segments, reliable junctions, partitions and multiple rooms |
 | Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |

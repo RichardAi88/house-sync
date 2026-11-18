@@ -40,7 +40,7 @@ def _data(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _money(result: dict[str, Any]) -> str:
-    currency = result["totals"].get("currency", _data(result).get("currency", "SGD"))
+    currency = result["totals"].get("currency", _data(result).get("currency", "AUD"))
     return f"{currency} {result['totals']['subtotal']:,.2f}"
 
 
@@ -52,29 +52,45 @@ def _safe_cell(value: Any) -> Any:
 
 
 def _measurement(result: dict[str, Any]) -> str:
-    return result.get("measurement_rule", "Quantities are derived from the compiled model. Reveals and wastage are excluded.")
+    return result.get("measurement_rule", "Quantities are derived from the compiled model. Price gross quantities after the stated coats and wastage.")
+
+
+def _rate_notes(result: dict[str, Any]) -> list[str]:
+    settings = _data(result)
+    currency = result["totals"].get("currency", settings.get("currency", "AUD"))
+    return [
+        f"Illustrative {currency} rates, not a tender estimate. Editable assumptions; no supplier quotes.",
+        f"Rate source: {settings.get('rate_source', 'Not recorded in this saved revision')} | Rate date: {settings.get('rate_date', 'Not recorded')}",
+    ]
+
+
+def _row_quantities(item: dict[str, Any]) -> tuple[float, float, float]:
+    """Read saved row facts, including the original single-quantity snapshots."""
+    return item.get("net_quantity", item["quantity"]), item.get("wastage_percent", 0), item.get("gross_quantity", item["quantity"])
 
 
 def _boq(result: dict[str, Any], output: Path) -> None:
     settings = _data(result)
-    currency = result["totals"].get("currency", settings.get("currency", "SGD"))
-    headers = ["Item", "Description", "Unit", "Quantity", "Unit rate", f"Amount ({currency})", "Element IDs"]
+    currency = result["totals"].get("currency", settings.get("currency", "AUD"))
+    headers = ["Item", "Description", "Unit", "Net quantity", "Wastage %", "Gross quantity", "Unit rate", f"Amount ({currency})", "Element IDs"]
     wb = Workbook()
     ws = wb.active
     ws.title = "Bill of quantities"
     ws.sheet_view.showGridLines = False
-    ws.merge_cells("A1:G1")
+    ws.merge_cells("A1:I1")
     ws["A1"] = "House bill of quantities"
     ws["A1"].font = Font(name="Calibri", size=19, bold=True, color="000000")
     ws.row_dimensions[1].height = 30
-    ws.merge_cells("A2:G2")
+    ws.merge_cells("A2:I2")
     ws["A2"] = _safe_cell(settings["project_name"])
     ws["A2"].font = Font(name="Calibri", size=12, color="000000")
-    ws.merge_cells("A3:G3")
-    ws["A3"] = f"Design revision {result['revision']} | Currency {currency} | Illustrative unit rates"
-    ws.merge_cells("A4:G4")
-    ws["A4"] = "Export snapshot. Edit the application to regenerate all linked outputs."
+    ws.merge_cells("A3:I3")
+    ws["A3"] = f"Design revision {result['revision']} | Currency {currency} | {_rate_notes(result)[0]}"
+    ws.merge_cells("A4:I4")
+    ws["A4"] = _rate_notes(result)[1]
     ws["A4"].font = Font(name="Calibri", italic=True, color=GREY[1:])
+    ws["A4"].alignment = Alignment(wrap_text=True, vertical="center")
+    ws.row_dimensions[4].height = max(26, min(150, 14 * ceil(len(ws["A4"].value) / 150)))
     header_row = 6
     for col, value in enumerate(headers, 1):
         cell = ws.cell(header_row, col, value)
@@ -84,18 +100,22 @@ def _boq(result: dict[str, Any], output: Path) -> None:
     ws.row_dimensions[header_row].height = 29
     thin = Side(style="thin", color=BORDER[1:])
     for idx, item in enumerate(result["boq"], header_row + 1):
-        values = [item["code"], item["description"], item["unit"], item["quantity"], item["rate"],
-                  f"=ROUND(D{idx}*E{idx},2)", ", ".join(item.get("element_ids", []))]
+        net, wastage, _gross = _row_quantities(item)
+        values = [item["code"], item["description"], item["unit"], net, wastage,
+                  f"=ROUND(D{idx}*(1+E{idx}/100),6)", item["rate"],
+                  f"=ROUND(F{idx}*G{idx},2)", ", ".join(item.get("element_ids", []))]
         for col, value in enumerate(values, 1):
-            cell = ws.cell(idx, col, value if col == 6 else _safe_cell(value))
+            cell = ws.cell(idx, col, value if col in (6, 8) else _safe_cell(value))
             cell.font = Font(name="Calibri", size=11, color="000000")
             cell.border = Border(bottom=thin)
-            cell.alignment = Alignment(vertical="center", wrap_text=True, horizontal="left" if col in (1, 2, 7) else "right")
+            cell.alignment = Alignment(vertical="center", wrap_text=True, horizontal="left" if col in (1, 2, 9) else "right")
             if idx % 2:
                 cell.fill = PatternFill("solid", fgColor=PALE[1:])
-            if col == 4:
-                cell.number_format = "#,##0.000"
-            if col in (5, 6):
+            if col in (4, 6):
+                cell.number_format = "#,##0.000000"
+            if col == 5:
+                cell.number_format = '0.00"%"'
+            if col in (7, 8):
                 cell.number_format = "#,##0.00"
         description_lines = ceil(len(str(item["description"])) / 48)
         reference_lines = ceil(len(", ".join(item.get("element_ids", []))) / 22)
@@ -103,31 +123,34 @@ def _boq(result: dict[str, Any], output: Path) -> None:
     last = header_row + len(result["boq"])
     total_row = last + 2
     ws.cell(total_row, 2, "Estimated subtotal")
-    ws.cell(total_row, 6, f"=SUM(F{header_row + 1}:F{last})")
+    ws.cell(total_row, 8, f"=SUM(H{header_row + 1}:H{last})")
     for cell in ws[total_row]:
         cell.font = Font(name="Calibri", bold=True, size=12)
         cell.fill = PatternFill("solid", fgColor="DCEBF2")
-    ws.cell(total_row, 6).number_format = f'"{currency} "#,##0.00'
+    ws.cell(total_row, 8).number_format = f'"{currency} "#,##0.00'
     note_row = total_row + 3
-    notes = [_measurement(result), "Unit rates are illustrative editable assumptions, not supplier quotations.",
+    notes = [_measurement(result), *_rate_notes(result),
+             "Net paint quantity includes the selected coat count; its measured wall area remains in the description. Gross = net x (1 + wastage % / 100); amounts price gross quantities.",
+             "Export snapshot. Edit the application to regenerate all linked outputs.",
              "This subtotal covers only the listed modelled items. Taxes, preliminaries and unmodelled work are excluded."]
     for offset, note in enumerate(notes):
         row = note_row + offset
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
         ws.cell(row, 1, note).alignment = Alignment(wrap_text=True, vertical="center")
         ws.cell(row, 1).font = Font(name="Calibri", size=10, color=GREY[1:])
-        ws.row_dimensions[row].height = 110 if offset == 0 else 26
-    for col, width in {"A": 12, "B": 52, "C": 10, "D": 15, "E": 15, "F": 19, "G": 25}.items():
+        ws.row_dimensions[row].height = max(26, 14 * ceil(len(note) / 150) + 12)
+    for col, width in {"A": 21, "B": 56, "C": 8, "D": 15, "E": 12, "F": 15, "G": 14, "H": 19, "I": 25}.items():
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "D7"
-    ws.auto_filter.ref = f"A6:G{last}"
+    ws.auto_filter.ref = f"A6:I{last}"
     ws.print_options.horizontalCentered = True
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 1
+    ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.print_area = f"A1:G{note_row + len(notes) - 1}"
+    ws.print_area = f"A1:I{note_row + len(notes) - 1}"
+    ws.print_title_rows = "1:6"
     ws.oddFooter.center.text = f"Revision {result['revision']}"
     wb.calculation = CalcProperties(fullCalcOnLoad=True)
     wb.save(output / "boq.xlsx")
@@ -136,11 +159,14 @@ def _boq(result: dict[str, Any], output: Path) -> None:
         writer.writerow(["Project", _safe_cell(settings["project_name"]), "Revision", result["revision"], "Currency", currency])
         writer.writerow(headers)
         for item in result["boq"]:
-            writer.writerow([_safe_cell(item["code"]), _safe_cell(item["description"]), item["unit"], item["quantity"],
+            net, wastage, gross = _row_quantities(item)
+            writer.writerow([_safe_cell(item["code"]), _safe_cell(item["description"]), item["unit"], net, wastage, gross,
                              item["rate"], item["amount"], ", ".join(item.get("element_ids", []))])
-        writer.writerow(["", "Estimated subtotal", "", "", "", result["totals"]["subtotal"]])
+        writer.writerow(["", "Estimated subtotal", "", "", "", "", "", result["totals"]["subtotal"]])
         writer.writerow(["Measurement", _measurement(result)])
-        writer.writerow(["Rates", "Illustrative assumptions. Taxes, preliminaries and unmodelled work excluded."])
+        for note in _rate_notes(result):
+            writer.writerow(["Rates", _safe_cell(note)])
+        writer.writerow(["Basis", "Gross = net x (1 + wastage % / 100). Paint net includes coats; measured area is in its description."])
 
 
 def _opening_kind(opening: dict[str, Any]) -> str:
@@ -151,6 +177,29 @@ def _opening_kind(opening: dict[str, Any]) -> str:
 def _opening_requirement(opening: dict[str, Any]) -> str:
     return (f"{opening['id']} on {opening['host']}: {opening['width_mm']:,.0f} x {opening['height_mm']:,.0f} mm opening; "
             f"sill {opening['sill_mm']:,.0f} mm; start offset {opening['start_mm']:,.0f} mm along the internal wall reference.")
+
+
+def _finish_requirements(result: dict[str, Any]) -> list[tuple[str, str]]:
+    """Describe each finish using its measured and priced BOQ snapshot facts."""
+    trade_scope = {
+        "FLOOR_FINISH": ("Floor finish", "Clear internal floor area; finish product, substrate preparation and laying system to be confirmed."),
+        "CEILING": ("Ceiling", "Clear internal ceiling area; lining, support and performance requirements to be confirmed."),
+        "SKIRTING": ("Skirting", "Internal perimeter less modelled door opening widths; profile, material and fixing system to be confirmed."),
+        "INTERNAL_PLASTER": ("Internal plaster/render", "Net internal vertical wall faces after opening void deductions; product, thickness and preparation to be confirmed."),
+        "EXTERNAL_RENDER": ("External render", "Net external vertical wall faces after opening void deductions; product, thickness and exposure suitability to be confirmed."),
+    }
+    requirements = []
+    for item in result["boq"]:
+        net, wastage, gross = _row_quantities(item)
+        if item["code"] in trade_scope:
+            label, scope = trade_scope[item["code"]]
+            requirements.append((label, f"{scope} Net {net:,.6f} {item['unit']}; wastage {wastage:g}%; gross priced quantity {gross:,.6f} {item['unit']}."))
+        elif item["code"] == "PAINT":
+            measured = item.get("measured_quantity", net)
+            coats = item.get("paint_coats", _data(result).get("paint_coats", 1))
+            requirements.append(("Paint measurement", f"Measured net wall area {measured:,.6f} m2; {coats:g} coat(s); net coated quantity {net:,.6f} m2. "
+                                 f"Wastage {wastage:g}%; gross priced quantity {gross:,.6f} m2. Reveals and floor/roof painting excluded."))
+    return requirements
 
 
 def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
@@ -173,6 +222,7 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
         ("Flat roof", f"{drawing.get('roof_thickness_mm', 200):,.0f} mm modelled roof, overhang {drawing.get('roof_overhang_mm', 300):,.0f} mm. Waterproofing specification to be confirmed."),
         ("Paint finish", f"{settings['paint_colour']} ({settings['paint_hex']}). Manufacturer product and physical colour reference to be confirmed."),
     ]
+    materials.extend(_finish_requirements(result))
     materials.extend((f"Door {opening['id']}", _opening_requirement(opening)) for opening in door)
     materials.extend((f"Window {opening['id']}", _opening_requirement(opening)) for opening in windows)
     if not door:
@@ -181,7 +231,9 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
         materials.append(("Windows", "None modelled."))
     notes = [
         "This draft technical schedule records the selected house geometry and finishes for attachment to a separately agreed contract.",
-        f"The matching BOQ and drawings carry design revision {result['revision']}. The BOQ subtotal is {_money(result)} using illustrative rates.",
+        f"The matching BOQ and drawings carry design revision {result['revision']}. The BOQ subtotal is {_money(result)}.",
+        *_rate_notes(result),
+        "Amounts use gross quantities after each item's stated wastage allowance. Paint quantity is measured net wall area multiplied by the selected coat count, then its wastage allowance.",
         _measurement(result),
         "Dimensions are in millimetres unless stated. Plan dimensions identify internal clear sizes and external wall sizes separately. Screen HEX colour is a visual reference.",
         "Opening start offsets follow the internal reference: W1 south eastwards; W2 east northwards; W3 north westwards; W4 west southwards.",

@@ -21,6 +21,8 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .schema import HouseSettings
+
 CENT = Decimal("0.01")
 ZERO = Decimal(0)
 INK = "173042"
@@ -41,7 +43,23 @@ FIELD_LABELS = {
     "rates.roof_m2": ("Roof rate / m2", "rates"),
     "rates.paint_m2": ("Paint rate / m2", "rates"),
     "rates.opening_each": ("Door/window allowance / each", "rates"),
+    "paint_coats": ("Paint coats", "finish"),
+    "rate_source": ("Rate source", "pricing"),
+    "rate_date": ("Rate date", "pricing"),
+    "rates.floor_finish_m2": ("Floor finish rate / m2", "rates"),
+    "rates.ceiling_m2": ("Ceiling rate / m2", "rates"),
+    "rates.skirting_m": ("Skirting rate / m", "rates"),
+    "rates.internal_plaster_m2": ("Internal plaster/render rate / m2", "rates"),
+    "rates.external_render_m2": ("External render rate / m2", "rates"),
 }
+
+for _code, _label in (
+    ("floor", "Floor slab"), ("wall", "Masonry"), ("roof", "Roof"), ("paint", "Paint"),
+    ("door", "Door"), ("window", "Window"), ("floor_finish", "Floor finish"),
+    ("ceiling", "Ceiling"), ("skirting", "Skirting"),
+    ("internal_plaster", "Internal plaster/render"), ("external_render", "External render"),
+):
+    FIELD_LABELS[f"wastage.{_code}"] = (f"{_label} wastage %", "wastage")
 
 
 def _decimal(value: Any, name: str, *, money: bool = False) -> Decimal:
@@ -87,6 +105,24 @@ def _flat(settings: dict, prefix: str = "") -> dict[str, Any]:
         else:
             flattened[field] = value
     return flattened
+
+
+def _comparison_settings(settings: dict) -> dict:
+    """Resolve newly optional inputs, without repricing historical BOQ snapshots.
+
+    Missing fields and their explicit defaults have the same meaning. Currency,
+    the original five rates and saved amounts remain exactly as recorded.
+    """
+    defaults = HouseSettings().model_dump(mode="json")
+    normalised = {key: value for key, value in settings.items() if key != "openings"}
+    for field in ("paint_coats", "rate_source", "rate_date"):
+        normalised.setdefault(field, defaults[field])
+    normalised["wastage"] = {**defaults["wastage"], **settings.get("wastage", {})}
+    rates = dict(settings.get("rates", {}))
+    for key in ("floor_finish_m2", "ceiling_m2", "skirting_m", "internal_plaster_m2", "external_render_m2"):
+        rates.setdefault(key, defaults["rates"][key])
+    normalised["rates"] = rates
+    return normalised
 
 
 
@@ -201,6 +237,13 @@ def _snapshot(result: dict, name: str) -> tuple[dict[str, dict], str, Decimal]:
         if not isinstance(item.get("unit"), str) or not item["unit"].strip():
             raise ValueError(f"{name} item {code} is missing its unit")
         quantity = _decimal(item.get("quantity"), f"{name} {code} quantity")
+        net = _decimal(item.get("net_quantity", quantity), f"{name} {code} net quantity")
+        gross = _decimal(item.get("gross_quantity", quantity), f"{name} {code} gross quantity")
+        wastage = _decimal(item.get("wastage_percent", 0), f"{name} {code} wastage")
+        if gross != quantity or wastage > 100:
+            raise ValueError(f"{name} item {code} has inconsistent gross quantity or wastage")
+        if "net_quantity" in item and abs(net * (1 + wastage / 100) - gross) > Decimal("0.000001"):
+            raise ValueError(f"{name} item {code} gross quantity does not equal net plus wastage")
         rate = _decimal(item.get("rate"), f"{name} {code} rate")
         amount = _decimal(item.get("amount"), f"{name} {code} amount", money=True)
         if _rounded(quantity * rate) != amount:
@@ -228,7 +271,7 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
     if currency != new_currency:
         raise ValueError("Choose revisions with the same currency. No currency conversion is applied.")
 
-    old_settings, new_settings = (_flat({key: value for key, value in result["settings"].items() if key != "openings"})
+    old_settings, new_settings = (_flat(_comparison_settings(result["settings"]))
                                   for result in (before, after))
     ordered_fields = list(FIELD_LABELS) + sorted((old_settings.keys() | new_settings.keys()) - FIELD_LABELS.keys())
     setting_changes = []
@@ -273,6 +316,11 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
                 parts.append(f"Quantity {_text(old_quantity)} to {_text(new_quantity)} {new_unit}")
             if old_rate != new_rate:
                 parts.append(f"unit rate {_text(old_rate)} to {_text(new_rate)} {currency}/{new_unit}")
+            for field, label, suffix in (("net_quantity", "net quantity", f" {new_unit}"),
+                                         ("wastage_percent", "wastage", "%")):
+                # Newly added presentation fields alone are not a variation.
+                if field in old and field in new and old[field] != new[field]:
+                    parts.append(f"{label} {_text(old[field])}{suffix} to {_text(new[field])}{suffix}")
             if old_description != new_description:
                 parts.append(f"description changed from '{old_description}' to '{new_description}'")
             if old["element_ids"] != new["element_ids"]:
@@ -291,6 +339,11 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
             "unit": new_unit or old_unit if comparable else f"{old_unit} to {new_unit}",
             "before_unit": old_unit, "after_unit": new_unit,
             "before_quantity": _float(old_quantity), "after_quantity": _float(new_quantity),
+            "before_net_quantity": (old or {}).get("net_quantity", _float(old_quantity)),
+            "after_net_quantity": (new or {}).get("net_quantity", _float(new_quantity)),
+            "before_wastage_percent": (old or {}).get("wastage_percent", 0),
+            "after_wastage_percent": (new or {}).get("wastage_percent", 0),
+            "before_gross_quantity": _float(old_quantity), "after_gross_quantity": _float(new_quantity),
             "quantity_delta": _float(quantity_delta) if quantity_delta is not None else None,
             "before_rate": _float(old_rate), "after_rate": _float(new_rate),
             "before_amount": _float(old_amount), "after_amount": _float(new_amount), "cost_delta": _float(delta),
@@ -315,9 +368,11 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         "This is the estimated difference between saved, modelled BOQ snapshots. Unit rates are illustrative unless replaced with project rates.",
         "Cost increases and decreases include quantity, rate and scope changes. A colour or description change can have zero cost at the saved rates.",
         "For matching units: quantity effect = (quantity B - quantity A) x rate A; rate effect = quantity B x (rate B - rate A). A rounding adjustment reconciles to the saved line amounts.",
+        "Priced quantities are gross quantities, including each saved item's wastage and paint coat multiplier. Wastage-only edits belong to the quantity effect, not the rate effect.",
         "Added and removed items are assigned to the quantity/scope effect. A changed measurement unit has no quantity/rate decomposition.",
         "Only affected BOQ items are listed; project totals include the complete saved BOQ. Omissions are positive absolute cost decreases or credits.",
-        "Demolition, abortive work, rework, waste, fees, preliminaries, taxes and programme/time effects are excluded unless separately modelled and priced. This report is not an approved contract variation.",
+        "Historical amounts, currencies and scope are preserved. Newly introduced trades are scope additions when absent from revision A; defaults alone do not change saved inputs.",
+        "Demolition, abortive work, rework, fees, preliminaries, taxes and programme/time effects are excluded unless separately modelled and priced. This report is not an approved contract variation.",
     ]
     return {
         "before_revision": before["revision"], "after_revision": after["revision"],
@@ -484,16 +539,18 @@ def _pdf(comparison: dict, directory: Path) -> None:
         table_rows.append([paragraph(value, "ChangeSmall") for value in values])
     if not comparison["items"]:
         table_rows.append([paragraph("No affected BOQ items", "ChangeSmall")] + [""] * 9)
-    table = Table(table_rows, colWidths=[45, 206, 43, 43, 42, 50, 50, 61, 61, 65], repeatRows=1, hAlign="LEFT")
+    # Keep stable BOQ codes readable when the expanded trades have long names.
+    table = Table(table_rows, colWidths=[90, 161, 43, 43, 42, 50, 50, 61, 61, 65], repeatRows=1, hAlign="LEFT")
     table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + INK)), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                               ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + PALE)]),
-                              ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                              ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                               ("LINEBELOW", (0, 0), (-1, -1), 0.35, colors.HexColor("#D5E0E4"))]))
     story.extend([table, Spacer(1, 10)])
     effects = comparison["totals"]
-    story.append(paragraph(f"Quantity/scope effect: {_signed(effects['quantity_effect'])}; rate effect: {_signed(effects['rate_effect'])}; rounding adjustment: {_signed(effects['rounding_effect'])} {comparison['currency']}.", "ChangeSmall"))
-    for note in comparison["notes"]:
-        story.append(paragraph(note, "ChangeSmall"))
+    story.append(KeepTogether([
+        paragraph(f"Quantity/scope effect: {_signed(effects['quantity_effect'])}; rate effect: {_signed(effects['rate_effect'])}; rounding adjustment: {_signed(effects['rounding_effect'])} {comparison['currency']}.", "ChangeSmall"),
+        *(paragraph(note, "ChangeSmall") for note in comparison["notes"]),
+    ]))
 
     def footer(canvas, document):
         canvas.saveState()
@@ -584,18 +641,19 @@ def _variation_pdf(comparison: dict, directory: Path) -> None:
         rows.append([paragraph(value, "VOSmall") for value in values])
     if not comparison["items"]:
         rows.append([paragraph("No affected BOQ items", "VOSmall")] + [""] * 9)
-    widths = [45, width - 460, 43, 43, 42, 50, 50, 61, 61, 65]
+    widths = [90, width - 505, 43, 43, 42, 50, 50, 61, 61, 65]
     table = Table(rows, colWidths=widths, repeatRows=1, hAlign="LEFT")
     table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + INK)),
                               ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + PALE)]),
                               ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                              ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                              ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                               ("LINEBELOW", (0, 0), (-1, -1), 0.35, colors.HexColor("#D5E0E4"))]))
     story.extend([table, Spacer(1, 10), paragraph(
-        f"Net of affected items: {_signed(totals['net_change'])} {currency}. Baseline estimate {totals['before']:,.2f} + additions {totals['additions']:,.2f} - omissions {totals['omissions']:,.2f} = revised estimate {totals['after']:,.2f} {currency}.", "VOBody"),
-        paragraph("Valuation basis and qualifications", "VOHeading")])
-    for note in comparison["notes"]:
-        story.append(paragraph(note, "VOSmall"))
+        f"Net of affected items: {_signed(totals['net_change'])} {currency}. Baseline estimate {totals['before']:,.2f} + additions {totals['additions']:,.2f} - omissions {totals['omissions']:,.2f} = revised estimate {totals['after']:,.2f} {currency}.", "VOBody")])
+    story.append(KeepTogether([
+        paragraph("Valuation basis and qualifications", "VOHeading"),
+        *(paragraph(note, "VOSmall") for note in comparison["notes"]),
+    ]))
 
     def footer(canvas, document):
         canvas.saveState()
