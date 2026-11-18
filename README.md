@@ -1,6 +1,38 @@
 # House Sync
 
-A house model with a coordinated bill of quantities, technical specification, and dimensioned drawings. Change dimensions or the paint finish in the local browser editor, then select **Update house & documents** to regenerate the complete set from one shared model revision.
+**One design change, instantly coordinated across drawings, cost variation, BOQ and purchase orders.**
+
+## The problem
+
+A client moves a wall before construction. The drafter revises the drawings and the estimator prices the variation. If the client accepts, the scheduler prepares the bill of quantities (BOQ) and purchasing raises orders. If they decline, the cycle starts again. Re-keying the change at each handoff can add days and leave drawings, costs and orders on different revisions.
+
+## What House Sync does
+
+Updating one shared model regenerates the drafter’s drawings and specification. The estimator compares the previous design (A) with the proposed design (B) to price the variation and prepare a draft variation order. The scheduler gets B’s BOQ. Purchasing turns its saved BOQ line items into draft orders. Every document carries B’s revision ID, and the variation order also identifies A.
+
+## Who it’s for
+
+Australian custom and semi-custom home builders, where nearly every home is tailored to the client and frequent variations make repeated handoffs costly.
+
+## Workflow
+
+```mermaid
+flowchart TD
+    change["Client requests a design change"] --> drawings["Drafter revises drawings and specification"]
+    drawings --> variation["Estimator prices the A-to-B variation"]
+    variation --> decision{"Client accepts?"}
+    decision -->|No| change
+    decision -->|Yes| boq["Scheduler releases the accepted BOQ"]
+    boq --> orders["Purchasing raises purchase orders"]
+```
+
+## Status of this introduction
+
+House Sync is a concept application for Australian custom and semi-custom builders. Its prices are **illustrative AUD rates, not a tender estimate**.
+
+This introduction was proposed in PR #5 while the AUD trades, CSV rate library, purchasing and room features were in review. The original SGD single-room prototype is historical context. The technical guide below retains the room and purchasing documentation from PR #4 and the client quote documentation from PR #6 for their integration. Feature-specific verification records are identified separately; they are not a combined test result.
+
+The application calculates the proposed BOQ when the drafter updates the model. Client acceptance, release of an accepted BOQ and issue of supplier orders remain decisions the builder manages. Filling an exported form does not approve a variation or send an order.
 
 Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The original MIT licence, source, examples and Git history are retained. Read the [original homespec README](HOMESPEC_README.md) for its compiler and Blender workflows.
 
@@ -15,6 +47,8 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
 - A **Purchasing** tab downloads one fillable draft purchase-order PDF per saved BOQ item, or all item PDFs in a ZIP. It uses the saved revision's quantities and prices.
+- Saved builder pricing settings for one combined overhead and margin markup, a fixed administration fee, credit treatment and quote validity; separately identified prime cost (PC) and provisional sum (PS) allowances.
+- A client variation quote PDF with acceptance fields, plus a separate internal itemised breakdown. The saved comparison retains the issue date and both source revisions.
 
 ## Edit directly from the plan
 
@@ -24,7 +58,7 @@ The **Plan editor** is the main workspace. Plan measurements and opening positio
 2. Select a door/window to drag it along its host wall or edit its start, size, sill and host in the inspector. Use the door/window tools to add openings and delete a selected opening to remove it.
 3. Use the snap grid for precise placement, pan/zoom or fit the plan, and undo/redo draft edits. A centred opening follows the wall centre until you give it a fixed start position.
 4. Review the draft changes and resolve the geometry checks. Openings need 100 mm from wall ends, a 100 mm head clearance, and a 100 mm gap from another opening on the same wall. These are application constraints, not a building-code assessment.
-5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. Open **Changes & cost** to review the estimate and download the client variation quote.
+5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. The **Changes & cost** tab then provides the client variation quote, a separate internal itemised breakdown and the internal variation order PDF.
 
 Draft plan edits do not issue documents. Downloads of the current document set remain disabled until a successful update; a failed validation/build preserves the preceding saved revision. Use the **Partition** tool to place two grid-snapped endpoints on the shell or other partitions. Select a partition to move it, drag either end grip, or edit its thickness, height and wall type. A new partition can temporarily leave a room inaccessible. Place a door on the new wall and review the application checks before updating.
 
@@ -37,6 +71,10 @@ Every successful update preserves the previous design and automatically creates 
 **Changes & cost** provides a client variation quote and a separate internal itemised breakdown. The internal variation order, Excel, CSV, PDF and JSON cost reports remain available to the estimator.
 
 The cost comparison reconciles the saved BOQ amounts. It separates changes in gross quantity (including coats and wastage) from changes in rates. Where both revisions record the rate basis, it also separates library changes from design overrides. A paint colour change at the same quantity and rate has zero cost. Earlier BOQs retain their recorded amounts. Revisions in different currencies cannot be compared. Two historical revisions in the same foreign currency can still be compared at cost. Client quotes use AUD.
+
+The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+
+The cost comparison covers the modelled BOQ scope. Demolition, rework, abortive work, fees, taxes and programme effects are excluded unless separately modelled. The client quote separately applies the saved commercial settings and allowance movements. It is not a record of contractual approval.
 
 ## Prepare a client variation quote
 
@@ -189,6 +227,8 @@ New designs default to **AUD**. The library rates are labelled **illustrative AU
 
 The BOQ now includes the slab, masonry, flat roof, opening allowances and five finishing trades with wall painting. It remains a concept estimate: taxes, preliminaries, foundations, reinforcement, drainage, services, waterproofing, demolition/rework, fees and programme effects are excluded. Product systems, preparation, thicknesses for finishing layers, construction details and regulatory performance require project-specific selections. The specification is a draft technical schedule for development alongside a contract. The demonstration does not claim that homespec's building guideline or regulatory checks have been run.
 
+BOQ subtotals are internal measured costs excluding GST. The client quote is a separate commercial calculation: it prices saved A-to-B cost movements and PC/PS allowance changes, applies the proposed revision's markup and fixed fee, then applies signed 10% GST. Only AUD revision pairs produce client quotes; same-currency historical comparisons remain available in other currencies. Private itemised trade rates and pricing provenance stay in the internal PDF. The client PDF contains the approved commercial totals, plain-English scope and client-facing allowance notes.
+
 ## Files and development
 
 | Path | Purpose |
@@ -202,9 +242,10 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
 | `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
 | `housesync/changes.py` | Described A-to-B revision comparison and change-cost report exports |
-| `housesync/quotes.py` | Variation pricing, allowance movements and client-facing quote data |
+| `housesync/quotes.py` | Signed variation pricing, allowance movements and client-safe quote data |
 | `housesync/quote_documents.py` | Client quote and separate internal itemised PDF |
-| `housesync/server.py` | Local server and immutable revision and quote publication |
+| `housesync/purchasing.py` | Draft purchase orders from saved BOQ rows |
+| `housesync/server.py` | Local server and immutable revision, comparison and quote publication |
 | `housesync/static/` | Browser editor and Three.js viewer |
 | `out/house-sync/<revision>/` | Generated files; excluded from Git |
 | [Project plan](docs/house-sync-plan.md) | Scope, verification and next features |
@@ -228,6 +269,12 @@ In a live Chrome session, overriding the slab rate from AUD 95 to 105 increased 
 The wider non-Blender tests have 20 existing Windows failures or errors matching the unchanged baseline by test ID. Seven involve symlink privileges, twelve involve advanced geometry and one involves a retained-camera source hash. Blender integration was not run locally.
 
 The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
+
+### Feature-specific verification before integration
+
+The room feature in PR #4 recorded 300 application/rate-library Python tests and 47 JavaScript tests passing on Windows, including T-junctions, differing heights, room holes, named IFC spaces, invalid layouts and legacy comparisons. Its Chrome review covered a partition, hosted access door, room finishes and grouped BOQ.
+
+The quote feature in PR #6 recorded 318 House Sync Python tests and 46 JavaScript tests passing on Windows. It checked signed credits, allowance movements, client/internal PDF separation, immutable quote dates/files after later changes and a Chrome quote workflow. These branch-specific counts are historical evidence, not the count for their combined integration.
 
 ## Plan editing audit evidence
 

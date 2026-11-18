@@ -1,10 +1,18 @@
 # House Sync project plan
 
-House Sync connects one editable house model to a bill of quantities, a draft technical specification, and dimensioned drawings. A user changes the house settings and selects **Update house and documents**. The application rebuilds the model and all affected outputs from the same inputs and records a shared revision.
+## Goal
+
+Carry a client’s pre-construction change through drafting, estimating, scheduling and purchasing on one model revision. The audience is Australian custom and semi-custom home builders, where nearly every house is tailored to the client and variations repeatedly pass between teams.
+
+The drafter updates the model, drawings and specification. The estimator compares the proposed revision B with the previous revision A and prepares the variation for the client. If the client requests a different design, the drafter revises it and the estimator prices the new proposal. Once the client accepts, the scheduler releases the BOQ for the accepted revision and purchasing uses its quantities to raise orders. Each document identifies the revision it came from.
 
 The project starts from [homespec](https://github.com/maccman/homespec), an MIT-licensed house modelling and export engine. The original licence, attribution, and source history are retained. House Sync adds a local browser application, validated inputs, pricing allowances, and document exporters.
 
-## Current first version
+## Integration context
+
+This documentation preserves the builder framing introduced in PR #5 and the technical room/purchasing/quote scope from PRs #4 and #6. The original SGD single-room description is historical; it must not be presented as the current default after the AUD features are integrated. Verification recorded below is feature-specific until the combined implementation is checked.
+
+## Implementation scope
 
 The demonstration starts with a single room in a rectangular shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
 
@@ -21,6 +29,8 @@ The demonstration starts with a single room in a rectangular shell, as a concept
 | Rate library | Editable `rates/rates_aud.csv`, one source/date per BOQ code, library snapshot SHA-256, optional project overrides |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
 | Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
+| Client variation quote | Proposed revision's markup, fee, credit policy, PC/PS movements, signed GST and validity; separate client/internal PDFs |
+| Purchasing | Fillable draft PDF per saved BOQ row or complete ZIP, without repricing a historical revision |
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |
 
 All exported documents are snapshots of the selected design revision. Editing an exported spreadsheet or Word document does not change the model. Saved settings provide the application's editable inputs.
@@ -33,6 +43,10 @@ All exported documents are snapshots of the selected design revision. Editing an
 - Generate all three document families from the same compiled result.
 - Include a revision based on settings, application source files and the recorded rate-library basis.
 - Keep local generated revisions in the ignored output directory while code, tests, plans, and decisions are tracked in Git.
+
+- Preserve the proposed revision's commercial settings and allowance balances separately from measured BOQ quantities.
+- Prepare separate client and internal quote documents from saved A/B snapshots; retain the issue date on reopening.
+- Keep supplier ordering and approval decisions with the builder.
 
 The local server and browser interface integrate these components. The README contains the current startup and verification instructions.
 
@@ -60,6 +74,12 @@ Older designs retain explicitly saved rates as overrides and retain their curren
 
 Edit the CSV, use **Refresh rate library** on the **Rates** tab, review values and per-row sources/dates, then explicitly update the house and documents. Optional per-item overrides and **Use library** controls manage project exceptions. A custom file can be selected with `--rates`. Generated revisions preserve the full SHA-256 of the raw library bytes and a detached copy of its rows, plus effective rate provenance for the coordinated exports; merely changing the CSV does not rewrite saved revisions.
 
+### Client quote pricing
+
+The proposed revision B supplies one combined overhead and margin markup, default 20% on cost, a fixed administration fee, default zero, a credit policy and a validity period, default 14 calendar days. PC and PS balances are separate from the measured BOQ and only their A-to-B value movements are priced. Apply markup to aggregate additions; credits are at cost by default or include markup when selected. The fixed fee applies once to any priced movement, including credit-only and offsetting variations, and is never marked up. Identical, editorial and equal-value PC/PS transfers attract no fee. Round each aggregate markup half-up to cents, then signed GST at 10% on the final ex-GST subtotal.
+
+The original 10 m to 12 m example has an AUD 8,310.00 cost increase and an AUD 10,969.20 client variation including GST with default settings. The client PDF shows approved commercial aggregates, plain-English scope and allowance movements; the internal PDF retains private trade detail and rate provenance. The first quote preparation fixes its issue date in UTC, and reopening preserves the saved dates and files. See the README for the full worked quote, credit cases and additional allowance example.
+
 ## Verification completed during setup
 
 Engine tests check input validation, geometry and quantity changes, opening deductions, stable revision behaviour, and paint changes without geometry changes. Exporter tests check shared revision/content, spreadsheet formulas, current opening dimensions, SVG escaping, and spreadsheet text handling.
@@ -68,21 +88,16 @@ Actual default exports were generated locally. The drawing PDF was rendered and 
 
 The DOCX package and contents passed structural tests. Visual DOCX rendering was unavailable on the setup host: LibreOffice was absent and native Word automation could not obtain a Windows logon session. Word layout should be visually checked on a working Word/LibreOffice installation before treating it as a reviewed issue document.
 
-## Planned development
+## Next features in builder workflow order
 
-| Milestone | Intended result |
-| --- | --- |
-| Implemented: editable openings | Add, remove, resize and move stable-ID doors/windows within validated hosts |
-| Implemented: multiple rooms | Orthogonal partitions, derived rooms, finish schedules, junction-corrected quantities and ID-based comparisons |
-| Per-wall finishes | Independent internal/external finishes tied to particular wall faces |
-| Product palette | Manufacturer, product, physical colour reference, substrate, preparation, and coating system |
-| Implemented: finishing trades and AUD allowances | Five finishing trades, editable coats/wastage, AUD defaults and rate source/date metadata |
-| Implemented: CSV rate library | Editable eleven-item CSV, per-row source/date, SHA-256 snapshots, per-item overrides/reset and rate attribution |
-| Project rates | Supplier quotation integration, product selection, location context and taxes remain |
-| Implemented: constrained plan editing | Rectangular shell resize, opening edits, snapping, undo/redo, geometry checks and draft review |
-| Further CAD editing | Non-orthogonal partitions and shell shapes |
-| Document controls | Revision comparisons and draft variation PDFs implemented; configurable templates, approval states and issue registers remain |
-| Deployment | Evaluate an authenticated hosted service after the local workflow is reliable |
+| Team | Implemented in this integration | Further work |
+|---|---|---|
+| 1. Drafter | Constrained shell editing, orthogonal partitions, stable named rooms, room finish schedules, dimensioned plans, IFC and 3D views | Extend beyond orthogonal partitions and rectangular shells. Add per-face finishes and a product palette with physical colour references, substrate, preparation and coating systems. |
+| 2. Estimator | Illustrative AUD trade rates, dated CSV library, project overrides, A-to-B quantity/rate effects, client quotes, fixed fee, credit policy and separate PC/PS movements | Add verified supplier quotations, location context and project-specific tax treatment beyond the fixed quote GST rule. Record the client's decision against the specific priced revision. |
+| 3. Scheduler | Compiled shell and room BOQ groups, finish trades, paint coats, wastage and immutable revision exports | Record which BOQ is released for an accepted variation, with an issue register and controlled approval state. |
+| 4. Purchasing | One fillable draft purchase order per saved BOQ row and a ZIP of the complete set | Link supplier/product selections, material coverage and pack sizes to order lines; record issued orders and delivery status. |
+
+Configurable document templates and an authenticated hosted service remain longer-term options after the local workflow is established. Client sign-off and supplier ordering are manual builder decisions; the current exporters do not send orders or update approval state.
 
 ## Engineering and contractual limits
 
