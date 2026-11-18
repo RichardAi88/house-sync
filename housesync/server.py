@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from .changes import compare_revisions, export_change_report
 from .documents import export_documents
 from .engine import build_house, revision_for
+from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
 from .rates import RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
@@ -236,19 +237,44 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             if not path.is_relative_to(root.resolve()) or not path.is_file():
                 self._json({"error": "File not found"}, 404)
                 return
-            content = path.read_bytes()
             mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             if path.suffix == ".js":
                 mime = "text/javascript"
+            self._content(path.read_bytes(), mime, path.name if attachment else None)
+
+        def _content(self, content: bytes, mime: str, filename: str | None = None) -> None:
             self.send_response(200)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(content)))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-cache")
-            if attachment:
-                self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            if filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.end_headers()
             self.wfile.write(content)
+
+        def _purchase_order(self, path: str) -> None:
+            parts = path.split("/")
+            if len(parts) != 4 or not REVISION.fullmatch(parts[2]):
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            revision, filename = parts[2:]
+            if filename == "all.zip":
+                saved = application.read_revision(revision)
+                self._content(purchase_orders_zip(saved), "application/zip", f"purchase-orders-{revision}.zip")
+                return
+            item = re.fullmatch(r"([A-Z][A-Z0-9_]*)\.pdf", filename)
+            if not item:
+                self._json({"error": "Purchase order not found"}, 404)
+                return
+            saved = application.read_revision(revision)
+            code = item.group(1)
+            try:
+                pdf = purchase_order_pdf(saved, code)
+            except UnknownPurchaseOrder:
+                self._json({"error": "Item not found in the saved bill of quantities"}, 404)
+                return
+            self._content(pdf, "application/pdf", f"PO-{revision}-{code}.pdf")
 
         def do_GET(self) -> None:
             if not self._allowed_host():
@@ -264,6 +290,8 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     self._json(load_rate_library(application.rate_library_path).snapshot())
                 elif path == "/api/revisions":
                     self._json(application.revisions())
+                elif path.startswith("/purchase-orders/"):
+                    self._purchase_order(path)
                 elif path == "/api/compare":
                     query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                     if len(query.get("before", [])) != 1 or len(query.get("after", [])) != 1:

@@ -135,3 +135,13 @@ The **Rates** tab displays the current CSV values and metadata, the current SHA-
 A-to-B costing first changes quantities at the old effective rate. For revisions with a known library basis, it then changes the library while holding the old overrides and uses the new quantity, followed by changing overrides against the new library at that same quantity. Those effects plus rounding reconcile to the saved BOQ difference. An existing override may therefore shield an item from a library rate change. Missing historical library or override evidence remains unknown; it is not fabricated to force an attribution.
 
 Explicit legacy stored prices are retained as overrides, including the former shared door/window value mapped to both codes. They are not silently reset to the latest CSV. Pre-finishes foreign-currency designs may be opened but must supply missing item prices or a matching-currency library before a new priced build. Original saved BOQs, currencies, amounts and revision identities remain authoritative for historical reports, and cross-currency comparison remains refused.
+
+## D-019 Export draft purchasing forms from the saved BOQ
+
+Entities: each saved BOQ row and its source house revision.
+
+The **Purchasing** tab offers one fillable draft purchase-order PDF per BOQ item and a ZIP of the item PDFs. Each PDF prints the saved revision and a reference derived from its BOQ code. The description, gross priced quantity, unit, effective rate, currency and amount come from the saved BOQ, preserving the same pricing basis as that revision's coordinated documents. Legacy revisions use their existing rows and saved priced quantities; no model rebuild or current-library repricing is required to describe their recorded scope.
+
+A BOQ quantity is a pricing measure, not an inferred supplier pack quantity. Painting keeps its saved coat-adjusted pricing quantity; it is not converted to litres or tins. Other items are not rounded into packs or order increments without explicit product and coverage data. Existing wastage is already part of the saved gross quantity and is not applied again. Illustrative rates remain illustrative, and the form is a draft for review.
+
+Buyer, supplier, required-by, delivery and approval fields may be filled in a compatible PDF viewer after download. The application does not send orders, contact suppliers, sign or approve forms, or write those downloaded form edits back into the house model. A successful house update supplies the revision used for current purchasing downloads; pending model edits do not issue a purchasing set for an unsaved design.

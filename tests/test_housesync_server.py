@@ -7,7 +7,9 @@ import json
 import threading
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -174,6 +176,30 @@ def test_http_build_and_download_share_published_revision(http_application):
     status, body, _ = request("GET", "/api/state")
     assert status == 200
     assert json.loads(body)["revision"] == result["revision"]
+
+
+def test_http_purchase_orders_use_the_selected_saved_revision(http_application, tmp_path, fake_exports):
+    application, request, _ = http_application
+    _, body, _ = request("POST", "/api/build", {"rate_overrides": {"FLOOR": 120}})
+    revision = json.loads(body)["revision"]
+    request("POST", "/api/build", {"length_mm": 12000})
+    original = application.read_revision(revision)
+    application.rate_library_path = tmp_path / "unavailable.csv"
+    prefix = f"/purchase-orders/{revision}"
+    status, pdf, headers = request("GET", prefix + "/FLOOR.pdf")
+    assert status == 200 and pdf.startswith(b"%PDF-")
+    assert headers["Content-Type"] == "application/pdf"
+    assert headers["Content-Disposition"] == f'attachment; filename="PO-{revision}-FLOOR.pdf"'
+    status, bundle, headers = request("GET", prefix + "/all.zip")
+    assert status == 200 and headers["Content-Type"] == "application/zip"
+    with ZipFile(BytesIO(bundle)) as archive:
+        assert set(archive.namelist()) == {f"PO-{revision}-{item['code']}.pdf" for item in original["boq"]}
+    assert application.read_revision(revision) == original
+    assert len(fake_exports["builds"]) == 2
+    for path in (prefix + "/ABSENT.pdf", prefix + "/%2e%2e/latest.json", prefix + "/%2F.pdf",
+                 "/purchase-orders/bad/FLOOR.pdf", "/purchase-orders/aaaaaaaaaaaa/all.zip"):
+        status, _, _ = request("GET", path)
+        assert status == 404
 
 
 def test_http_rates_and_invalid_library_leave_issued_revision_available(http_application, tmp_path):

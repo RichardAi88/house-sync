@@ -105,6 +105,7 @@ function setDownloadLinks() {
     else { link.removeAttribute('href'); link.removeAttribute('download'); link.tabIndex = -1; }
   });
   $('#save-settings').disabled = !state.result || state.dirty || state.busy;
+  setPurchaseOrderLinks();
 }
 
 function resultReceived(result, populate = false) {
@@ -131,6 +132,7 @@ function resultReceived(result, populate = false) {
   $('#metric-cost').textContent = money(total, currency);
   $('#boq-total').textContent = money(total, currency);
   renderBOQ(result);
+  renderPurchasing(result);
   renderSpec(result);
   renderRates();
   updateOverrideHints();
@@ -142,6 +144,67 @@ function resultReceived(result, populate = false) {
   if (libraryDiffersFromRevision()) setDirty(false);
   void refreshComparisons(result, previousRevision, !populate);
   void refreshRateLibrary();
+}
+
+function setPurchaseOrderLinks() {
+  const result = state.result;
+  const rows = Array.isArray(result?.boq) ? result.boq : [];
+  const ready = Boolean(result?.revision && rows.length && !state.dirty && !state.busy);
+  document.querySelectorAll('[data-purchase-order-code]').forEach(link => {
+    const code = link.dataset.purchaseOrderCode;
+    const hasItem = code === 'all' || rows.some(row => row.code === code);
+    const enabled = Boolean(ready && hasItem && link.dataset.sourceRevision === result.revision);
+    link.classList.toggle('disabled', !enabled);
+    link.setAttribute('aria-disabled', String(!enabled));
+    if (enabled) {
+      link.href = `/purchase-orders/${encodeURIComponent(result.revision)}/${code === 'all' ? 'all.zip' : encodeURIComponent(code) + '.pdf'}`;
+      link.setAttribute('download', ''); link.tabIndex = 0;
+    } else {
+      link.removeAttribute('href'); link.removeAttribute('download'); link.tabIndex = -1;
+    }
+  });
+  $('#purchasing-status').textContent = !result?.revision || !rows.length
+    ? 'Generate a saved BOQ to prepare draft purchase orders.'
+    : state.busy ? 'Updating house and documents. Purchase order downloads will be available when the revision is saved.'
+    : state.dirty ? 'Pending edits: update house & documents before downloading purchase orders.'
+    : `Draft purchase orders use saved revision ${result.revision}. Complete the PDF fields and review before issue.`;
+}
+
+function renderPurchasing(result) {
+  const rows = Array.isArray(result?.boq) ? result.boq : [];
+  const currency = result?.totals?.currency || result?.settings?.currency || '';
+  const recordedNumber = (value, digits) => value === undefined || value === null ? 'Not recorded' : Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+  const recordedMoney = value => value === undefined || value === null ? 'Not recorded' : currency ? money(value, currency) : `${number(value)} (currency not recorded)`;
+  const recordedRate = value => value === undefined || value === null ? 'Not recorded' : `${currency || '(currency not recorded)'} ${recordedNumber(value, 20)}`;
+  const body = $('#purchasing-body'); body.replaceChildren();
+  $('#purchasing-revision').textContent = result?.revision ? `Source revision ${result.revision}` : 'No saved revision';
+  $('#purchasing-count').textContent = `${rows.length} draft purchase order${rows.length === 1 ? '' : 's'}`;
+  $('#purchasing-empty').hidden = Boolean(rows.length);
+  $('#purchasing-total').textContent = rows.length ? recordedMoney(result?.totals?.subtotal) : '\u2014';
+  $('#purchase-orders-all').dataset.sourceRevision = result?.revision || '';
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    const item = document.createElement('td'); const code = document.createElement('strong'); code.textContent = row.code || 'Item code not recorded'; item.append(code);
+    const description = document.createElement('p'); description.textContent = row.description || 'Description not recorded'; item.append(description);
+    if (row.rate_origin || row.rate_source || row.rate_effective_date) {
+      const basis = document.createElement('small'); basis.textContent = [row.rate_origin, row.rate_source, row.rate_effective_date].filter(Boolean).join(' | '); item.append(basis);
+    }
+    tr.append(item);
+    for (const value of [recordedNumber(row.gross_quantity ?? row.quantity, 6), row.unit || 'Not recorded', recordedRate(row.rate), recordedMoney(row.amount)]) {
+      const cell = document.createElement('td'); cell.textContent = value; tr.append(cell);
+    }
+    const action = document.createElement('td');
+    if (typeof row.code === 'string' && row.code) {
+      const link = document.createElement('a'); link.className = 'download-link disabled'; link.textContent = 'Download draft PO PDF';
+      link.dataset.purchaseOrderCode = row.code; link.dataset.sourceRevision = result?.revision || '';
+      link.setAttribute('aria-label', `Download ${row.code} draft purchase order PDF`);
+      link.setAttribute('aria-describedby', 'purchasing-status');
+      link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); });
+      action.append(link);
+    }
+    tr.append(action); body.append(tr);
+  }
+  setPurchaseOrderLinks();
 }
 
 function metric(selector, value, unit) {
@@ -637,6 +700,7 @@ function showView(name) {
 document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => showView(button.dataset.panel)));
 
 document.querySelectorAll('[data-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
+$('#purchase-orders-all').addEventListener('click', event => { if (event.currentTarget.getAttribute('aria-disabled') === 'true') event.preventDefault(); });
 $('#roof-toggle').addEventListener('change', roofVisibility);
 $('#reset-camera').addEventListener('click', resetCamera);
 $('#save-settings').addEventListener('click', () => {
