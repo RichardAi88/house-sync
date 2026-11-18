@@ -26,12 +26,12 @@ jobs:
       - name: Lint House Sync
         shell: bash
         run: uv run --frozen ruff check housesync tests/test_housesync*.py tests/test_rate_library.py
-      - name: Test model and coordinated exports
+      - name: Test model, pricing and coordinated exports
         shell: bash
         run: uv run --frozen pytest tests/test_housesync*.py tests/test_rate_library.py -q
       - name: Check browser source
         shell: bash
         run: for file in housesync/static/*.js; do node --check "$file" || exit 1; done
-      - name: Test plan editing
+      - name: Test plan and estimator editing
         shell: bash
         run: node --test tests/*.test.mjs

@@ -18,6 +18,8 @@ export const WASTAGE_DEFAULTS = Object.freeze({
 export const RATE_SOURCE_DEFAULT = 'Illustrative AUD rates, not a tender estimate; no supplier quotes';
 export const RATE_DATE_DEFAULT = '2026-11-17';
 
+export const BUILDER_PRICING_DEFAULTS = Object.freeze({ overhead_margin_percent: 20, admin_fee_aud: 0, gst_percent: 10, credit_treatment: 'at_cost', validity_days: 14, builder_name: '', client_description: '' });
+
 /** Fill absent pricing fields without replacing historical currency or entered rates. */
 export function normalizeBoqSettings(settings) {
   const result = {
@@ -26,6 +28,8 @@ export function normalizeBoqSettings(settings) {
       ? Object.fromEntries(RATE_ITEMS.filter(([, , , key]) => Object.hasOwn(settings.rates ?? {}, key)).map(([code, , , key]) => [code, settings.rates[key]]))
       : { ...settings.rate_overrides },
     wastage: { ...WASTAGE_DEFAULTS, ...settings.wastage },
+    builder_pricing: { ...BUILDER_PRICING_DEFAULTS, ...settings.builder_pricing },
+    allowances: Array.isArray(settings.allowances) ? settings.allowances.map(item => ({ note: '', ...item })) : [],
     rate_source: settings.rate_source ?? RATE_SOURCE_DEFAULT, rate_date: settings.rate_date ?? RATE_DATE_DEFAULT,
   };
   // The old rates mirror must never pin library-driven new designs to defaults.
@@ -335,6 +339,16 @@ export function describeChanges(before, after) {
   for (const key of wastage) if (!same(a.wastage[key], b.wastage[key])) descriptions.push(key.replaceAll('_', ' ') + ' wastage: ' + format(a.wastage[key]) + '% to ' + format(b.wastage[key]) + '%.');
   for (const [key, label] of [['rate_source', 'Rate source'], ['rate_date', 'Rate date']]) {
     if (a[key] !== b[key]) descriptions.push(label + ': ' + a[key] + ' to ' + b[key] + '.');
+  }
+  for (const [key, label] of [['overhead_margin_percent', 'Combined overhead and margin'], ['admin_fee_aud', 'Variation administration fee'], ['credit_treatment', 'Credit treatment'], ['validity_days', 'Quote validity days'], ['builder_name', 'Builder name'], ['client_description', 'Client description']]) {
+    if (!same(a.builder_pricing[key], b.builder_pricing[key])) descriptions.push(label + ': ' + String(a.builder_pricing[key]) + ' to ' + String(b.builder_pricing[key]) + '.');
+  }
+  const previousAllowances = new Map(a.allowances.map(item => [item.id, item]));
+  const nextAllowances = new Map(b.allowances.map(item => [item.id, item]));
+  for (const id of new Set([...previousAllowances.keys(), ...nextAllowances.keys()])) {
+    const previous = previousAllowances.get(id), current = nextAllowances.get(id);
+    if (!previous || !current) descriptions.push((current ? 'Added ' : 'Removed ') + 'allowance ' + id + ': ' + (current || previous).description + '.');
+    else for (const key of ['kind', 'description', 'amount', 'note']) if (!same(previous[key], current[key])) descriptions.push('Allowance ' + id + ' ' + key + ': ' + String(previous[key] ?? '') + ' to ' + String(current[key] ?? '') + '.');
   }
   return descriptions;
 }

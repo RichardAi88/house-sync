@@ -13,7 +13,7 @@ import threading
 import traceback
 import uuid
 import webbrowser
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -25,14 +25,42 @@ from .documents import export_documents
 from .engine import build_house, revision_for
 from .layout import derive_layout
 from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
+from .quote_documents import export_quote_documents
+from .quotes import build_variation_quote
 from .rates import RateLibrary, RateLibraryError, load_rate_library
 from .schema import HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
-MAX_BODY = 256 * 1024
+MAX_BODY = 4_194_304
 REVISION = re.compile(r"^[0-9a-f]{12}$")
 COMPARISON = re.compile(r"^[0-9a-f]{12}_[0-9a-f]{12}_[0-9a-f]{12}$")
+COMPARISON_CONTRACT = "house-sync-client-quotes-1"
+COMPARISON_SOURCES = ("changes.py", "schema.py", "rates.py", "quotes.py", "quote_documents.py", "server.py")
+
+
+def _quote_issue_date() -> date:
+    """Freeze the UTC calendar date when a comparison is first prepared."""
+    return datetime.now(UTC).date()
+
+
+def _comparison_source_fingerprint() -> str:
+    source = [COMPARISON_CONTRACT.encode("ascii")]
+    for name in COMPARISON_SOURCES:
+        source.extend((name.encode("ascii"), Path(__file__).with_name(name).read_bytes()))
+    return hashlib.sha256(b"\0".join(source)).hexdigest()
+
+
+def _current_comparison_contract(comparison: dict) -> bool:
+    """A historical report without quote artefacts is left intact on upgrade."""
+    if comparison.get("report_contract") != COMPARISON_CONTRACT or "quote" not in comparison:
+        return False
+    quote_snapshot = comparison["quote"]
+    quote_files = {"client_quote_pdf", "internal_breakdown_pdf"}
+    if comparison.get("currency") != "AUD":
+        return quote_snapshot is None and not quote_files.intersection(comparison.get("files", {}))
+    return (isinstance(quote_snapshot, dict) and isinstance(quote_snapshot.get("public"), dict)
+            and isinstance(quote_snapshot.get("internal"), dict) and quote_files.issubset(comparison.get("files", {})))
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
@@ -86,22 +114,38 @@ class Application:
         with self.lock:
             before = self.read_revision(before_revision)
             after = self.read_revision(after_revision)
-            # Legacy comparison normalisation depends on validated schema
-            # defaults as well as report code; both version cached reports.
-            source = b"\0".join(Path(__file__).with_name(name).read_bytes() for name in ("changes.py", "schema.py", "rates.py"))
-            version = hashlib.sha256(source).hexdigest()[:12]
-            comparison_id = f"{before_revision}_{after_revision}_{version}"
-            destination = self.changes_root / comparison_id
-            if (destination / "comparison.json").is_file():
-                return json.loads((destination / "comparison.json").read_text(encoding="utf-8"))
+            fingerprint = _comparison_source_fingerprint()
+            version, migration = fingerprint[:12], 0
+            while True:
+                comparison_id = f"{before_revision}_{after_revision}_{version}"
+                destination = self.changes_root / comparison_id
+                record = destination / "comparison.json"
+                if not destination.exists():
+                    break
+                if record.is_file():
+                    cached = json.loads(record.read_text(encoding="utf-8"))
+                    if _current_comparison_contract(cached):
+                        return cached
+                # Even an older/incomplete cache at the current key must not
+                # be overwritten. Publish a new, deterministic upgrade key.
+                migration += 1
+                version = hashlib.sha256(f"{fingerprint}\0quote-upgrade-{migration}".encode("ascii")).hexdigest()[:12]
             comparison = compare_revisions(before, after)
             comparison["comparison_id"] = comparison_id
             comparison["created_at"] = datetime.now(UTC).isoformat()
+            comparison["report_contract"] = COMPARISON_CONTRACT
+            comparison["source_fingerprint"] = fingerprint
+            comparison["quote"] = None
+            if comparison["currency"] == "AUD":
+                comparison["quote"] = build_variation_quote(before, after, comparison, _quote_issue_date())
+                comparison["quote_date_basis"] = "UTC calendar date of first preparation"
             self.changes_root.mkdir(parents=True, exist_ok=True)
             temporary = self.changes_root / ("building-" + uuid.uuid4().hex)
             temporary.mkdir()
             try:
                 files = export_change_report(comparison, temporary)
+                if comparison["quote"] is not None:
+                    files.update(export_quote_documents(comparison, temporary))
                 comparison["files"] = {
                     key: f"/changes/{comparison_id}/" + quote(name, safe="/") for key, name in files.items()
                 }
@@ -284,7 +328,7 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
             path = unquote(urlsplit(self.path).path)
             try:
                 if path == "/api/health":
-                    self._json({"status": "ok", "application": "House Sync", "features": ["revision_comparison"]})
+                    self._json({"status": "ok", "application": "House Sync", "features": ["revision_comparison", "client_variation_quotes"]})
                 elif path == "/api/state":
                     self._json(application.envelope(application.state()))
                 elif path == "/api/rates":

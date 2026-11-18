@@ -178,6 +178,28 @@ def test_http_build_and_download_share_published_revision(http_application):
     assert json.loads(body)["revision"] == result["revision"]
 
 
+def test_maximum_room_metadata_and_allowances_fit_the_combined_import_boundary(http_application):
+    _, request, _ = http_application
+    emoji = "\U0001f3e0"
+    settings = HouseSettings().model_dump(mode="json")
+    # Unmatched room metadata is deliberately retained when topology changes.
+    # All 200 records and all 100 quote allowances may coexist in a valid file.
+    settings["rooms"] = [{"id": f"ROOM{index}", "name": emoji * 120,
+                          "finishes": dict.fromkeys(("floor", "ceiling", "skirting", "paint"), emoji * 120)}
+                         for index in range(1, 201)]
+    settings["allowances"] = [{"id": f"AL{index}", "kind": "prime_cost", "description": emoji * 240,
+                               "amount": 1, "note": emoji * 1000} for index in range(1, 101)]
+    settings["builder_pricing"]["builder_name"] = emoji * 120
+    settings["builder_pricing"]["client_description"] = emoji * 2000
+    encoded_size = len(json.dumps(settings).encode("utf-8"))
+    assert 2_097_152 < encoded_size < server.MAX_BODY <= 4_194_304
+    status, body, _ = request("POST", "/api/build", settings)
+    assert status == 200
+    saved = json.loads(body)
+    assert len(saved["settings"]["rooms"]) == 200
+    assert len(saved["settings"]["allowances"]) == 100
+
+
 def test_http_purchase_orders_use_the_selected_saved_revision(http_application, tmp_path, fake_exports):
     application, request, _ = http_application
     _, body, _ = request("POST", "/api/build", {"rate_overrides": {"FLOOR": 120}})
@@ -324,7 +346,8 @@ def test_http_compare_and_report_downloads_reconcile(http_application):
     assert status == 200
     report = json.loads(body)
     assert report["totals"]["after"] - report["totals"]["before"] == report["totals"]["net_change"] == 1520
-    assert {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json", "variation_pdf"} == set(report["files"])
+    assert {"changes_xlsx", "changes_csv", "changes_pdf", "changes_json", "variation_pdf",
+            "client_quote_pdf", "internal_breakdown_pdf"} == set(report["files"])
     for url in report["files"].values():
         status, content, _ = request("GET", url)
         assert status == 200

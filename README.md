@@ -24,7 +24,7 @@ The **Plan editor** is the main workspace. Plan measurements and opening positio
 2. Select a door/window to drag it along its host wall or edit its start, size, sill and host in the inspector. Use the door/window tools to add openings and delete a selected opening to remove it.
 3. Use the snap grid for precise placement, pan/zoom or fit the plan, and undo/redo draft edits. A centred opening follows the wall centre until you give it a fixed start position.
 4. Review the draft changes and resolve the geometry checks. Openings need 100 mm from wall ends, a 100 mm head clearance, and a 100 mm gap from another opening on the same wall. These are application constraints, not a building-code assessment.
-5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. The **Changes & cost** tab then provides the variation order PDF.
+5. Select **Update house & documents** to compile the design, update the 3D model and coordinated exports, and record the A-to-B cost change. Open **Changes & cost** to review the estimate and download the client variation quote.
 
 Draft plan edits do not issue documents. Downloads of the current document set remain disabled until a successful update; a failed validation/build preserves the preceding saved revision. Use the **Partition** tool to place two grid-snapped endpoints on the shell or other partitions. Select a partition to move it, drag either end grip, or edit its thickness, height and wall type. A new partition can temporarily leave a room inaccessible. Place a door on the new wall and review the application checks before updating.
 
@@ -34,11 +34,36 @@ Select a derived room to enter its name and floor, ceiling, skirting or paint fi
 
 Every successful update preserves the previous design and automatically creates a comparison with the new design. Open **Changes & cost** to review the last transition, or select any two saved revisions and choose **Compare revisions**. Each report identifies its two source revisions and is saved locally alongside the revision history. Reopening the application preserves these records.
 
-Select **Export variation order PDF** to download a draft variation order for the selected A-to-B comparison. It includes a VO reference, source revisions, change descriptions, itemised quantities/rates and costs, additions/omissions, the net variation and revised estimate, plus contract reference and approval/signature fields. Exporting leaves the order as a draft for review and approval; it does not approve a variation or assess programme impact.
+**Changes & cost** provides a client variation quote and a separate internal itemised breakdown. The internal variation order, Excel, CSV, PDF and JSON cost reports remain available to the estimator.
 
-The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+The cost comparison reconciles the saved BOQ amounts. It separates changes in gross quantity (including coats and wastage) from changes in rates. Where both revisions record the rate basis, it also separates library changes from design overrides. A paint colour change at the same quantity and rate has zero cost. Earlier BOQs retain their recorded amounts. Revisions in different currencies cannot be compared. Two historical revisions in the same foreign currency can still be compared at cost. Client quotes use AUD.
 
-The comparison separates gross quantity effects (including coat count and wastage changes) from rate effects and reconciles them to rounded BOQ amounts. Where both saved revisions have a recorded library/override basis, the rate effect is also attributed to library changes and override changes. Historical rows without that evidence retain an unknown attribution instead of an invented split. Missing new settings in older designs receive defaults when loaded and compared; saved revision BOQs and amounts remain immutable. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
+## Prepare a client variation quote
+
+1. In the estimator sidebar, open **Variation quote pricing**. Enter the builder's name and a plain-English description for the client. Review the proposed revision's combined overhead and margin, fixed administration fee, credit treatment and validity period.
+2. Add a **prime cost (PC)** item for a selection still to be made, such as a tap set, or a **provisional sum (PS)** for work whose scope is still uncertain. Enter the allowance excluding GST and a note the client can read. Enter only scope additional to the measured BOQ. The quote shows the previous and proposed allowance and prices the difference once.
+3. Select **Update house & documents**. In **Changes & cost**, choose the previous revision as A and the proposal as B. B supplies the pricing settings for this quote. Check the **Internal itemised breakdown PDF** for quantities, rates, their sources and allowance movements.
+4. Share the **Client variation quote PDF** for acceptance. It includes the builder name and logo placeholders, scope, allowance movements, price, issue and expiry dates, and fields for the client's name, signature and date. The first preparation fixes the issue date in UTC. Validity defaults to 14 calendar days. Reopening the saved quote retains its dates, settings and PDFs after later edits.
+
+### Worked quote for extending the house from 10 m to 12 m
+
+With the supplied **illustrative AUD rates, not a tender estimate**, the 10 × 8 m house has a BOQ subtotal of AUD 53,330.22. Extending it to 12 × 8 m produces AUD 61,640.22. The table shows the generated client quote with default settings, two paint coats, default wastage and no PC or PS changes.
+
+| Variation component | AUD |
+|---|---:|
+| Measured cost increase | 8,310.00 |
+| Credits for omissions | 0.00 |
+| Combined overhead and margin (20% markup on cost) | 1,662.00 |
+| Fixed administration fee | 0.00 |
+| **Subtotal excluding GST** | **9,972.00** |
+| GST at 10% | 997.20 |
+| **Client variation including GST** | **10,969.20** |
+
+The 20% is one illustrative markup on cost. A fixed fee of AUD 150 would bring the same quote to **AUD 11,134.20 including GST**. The fee applies once when a measured item or allowance changes in value, including a credit-only variation. It attracts GST and carries no markup. A change to wording alone attracts no fee.
+
+Adding a PC allowance of AUD 500 and a PS allowance of AUD 1,000 to revision B lifts the cost difference to AUD 9,810.00. With the default fee and markup, the quote becomes **AUD 12,949.20 including GST**. The measured BOQ subtotal for B stays at AUD 61,640.22.
+
+Reversing the extension with the default zero fee gives a **credit of AUD 9,141.00 including GST** under **Credit at cost**. Selecting **Credit including margin** also returns the markup, increasing the credit to **AUD 10,969.20**. For a mixture of additions and omissions, the quote calculates markup on additions and applies the selected treatment to credits before calculating GST.
 
 ## Prepare draft purchase orders
 
@@ -177,7 +202,9 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | `housesync/engine.py` | Homespec geometry/IR, quantities, BOQ, IFC and browser mesh |
 | `housesync/documents.py` | Coordinated Excel, Word, PDF and SVG exports |
 | `housesync/changes.py` | Described A-to-B revision comparison and change-cost report exports |
-| `housesync/server.py` | Local server and immutable revision publication |
+| `housesync/quotes.py` | Variation pricing, allowance movements and client-facing quote data |
+| `housesync/quote_documents.py` | Client quote and separate internal itemised PDF |
+| `housesync/server.py` | Local server and immutable revision and quote publication |
 | `housesync/static/` | Browser editor and Three.js viewer |
 | `out/house-sync/<revision>/` | Generated files; excluded from Git |
 | [Project plan](docs/house-sync-plan.md) | Scope, verification and next features |

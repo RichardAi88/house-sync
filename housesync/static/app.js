@@ -13,6 +13,8 @@ const legacyOpenings = () => [
   { id: 'N2', kind: 'window', host: 'W2', offset_mm: null, width_mm: 1500, height_mm: 1200, sill_mm: 900 },
 ];
 let draftOpenings = legacyOpenings();
+let draftAllowances = [];
+const reservedAllowanceIds = new Set();
 const interiorSettings = settings => ({
   partitions: structuredClone((settings.partitions ?? []).map(wall => ({
     thickness_mm: 100, height_mm: 3000, wall_type: 'partition', ...wall,
@@ -30,28 +32,68 @@ const comparison = { revisions: [], result: null, busy: false, request: 0, refre
 const rateLibraryState = { current: null, error: '', request: 0, busy: false };
 const overrideFields = Object.fromEntries(RATE_ITEMS.map(([code]) => [code, '#override-' + code.toLowerCase().replaceAll('_', '-')]));
 const wastageFields = Object.fromEntries(Object.keys(WASTAGE_DEFAULTS).map(key => [key, '#wastage-' + key.replaceAll('_', '-')]));
-const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', ...Object.values(overrideFields), ...Object.values(wastageFields)];
+const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', '#builder-name', '#quote-markup', '#quote-admin', '#quote-credit-treatment', '#quote-validity', '#client-description', ...Object.values(overrideFields), ...Object.values(wastageFields)];
 const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
 const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), ...interiorSettings(draftInterior) };
+  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), ...interiorSettings(draftInterior), builder_pricing: { overhead_margin_percent: Number($('#quote-markup').value), admin_fee_aud: Number($('#quote-admin').value), gst_percent: 10, credit_treatment: $('#quote-credit-treatment').value, validity_days: Number($('#quote-validity').value), builder_name: $('#builder-name').value.trim(), client_description: $('#client-description').value.trim().replaceAll('\r\n', '\n') }, allowances: draftAllowances.map(item => ({ ...item, description: item.description.trim().replaceAll('\r\n', '\n'), note: item.note.trim().replaceAll('\r\n', '\n') })) };
 }
 
 function fillForm(settings) {
   settings = normalizeBoqSettings(settings);
   draftOpenings = structuredClone(settings.openings ?? legacyOpenings());
+  draftAllowances = structuredClone(settings.allowances); for (const item of draftAllowances) reservedAllowanceIds.add(item.id);
   draftInterior = interiorSettings(settings);
   if (settings.currency && ![...$('#currency').options].some(option => option.value === settings.currency)) {
     const option = document.createElement('option'); option.value = settings.currency; option.textContent = settings.currency; $('#currency').append(option);
   }
-  const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date };
+  const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date, '#builder-name': settings.builder_pricing.builder_name, '#quote-markup': settings.builder_pricing.overhead_margin_percent, '#quote-admin': settings.builder_pricing.admin_fee_aud, '#quote-credit-treatment': settings.builder_pricing.credit_treatment, '#quote-validity': settings.builder_pricing.validity_days, '#client-description': settings.builder_pricing.client_description };
   for (const [id, value] of Object.entries(map)) if (value !== undefined && value !== null) $(id).value = value;
   for (const [code, id] of Object.entries(overrideFields)) $(id).value = Object.hasOwn(settings.rate_overrides, code) ? settings.rate_overrides[code] : '';
   for (const [key, id] of Object.entries(wastageFields)) $(id).value = settings.wastage[key];
-  updateOverrideHints();
+  renderAllowances(); updateOverrideHints();
   updateSwatches();
+}
+
+function renderAllowances() {
+  const list = $('#quote-allowances'); list.replaceChildren();
+  $('#allowances-empty').hidden = draftAllowances.length > 0;
+  $('#add-pc-allowance').disabled = state.busy || draftAllowances.length >= 100;
+  $('#add-ps-allowance').disabled = state.busy || draftAllowances.length >= 100;
+  for (const item of draftAllowances) {
+    const card = document.createElement('div'); card.className = 'allowance-editor'; card.dataset.allowanceId = item.id;
+    const title = document.createElement('strong'); title.textContent = item.id; card.append(title);
+    const fields = [ ['kind', 'Allowance type', 'select'], ['description', 'Description', 'textarea'], ['amount', 'Allowance amount (AUD)', 'number'], ['note', 'Allowance note (client visible)', 'textarea'] ];
+    for (const [key, labelText, type] of fields) {
+      const label = document.createElement('label'); label.className = 'field'; label.textContent = labelText;
+      const input = document.createElement(type === 'select' ? 'select' : type === 'textarea' ? 'textarea' : 'input');
+      input.dataset.allowanceField = key; input.setAttribute('aria-label', `${item.id} ${labelText}`);
+      if (type === 'select') for (const [value, text] of [['prime_cost', 'Prime cost (PC)'], ['provisional_sum', 'Provisional sum (PS)']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; input.append(option); }
+      if (type === 'number') { input.type = 'number'; input.min = '0'; input.max = '10000000'; input.step = '0.01'; }
+      if (type === 'textarea') { input.rows = 2; input.maxLength = key === 'description' ? 240 : 1000; }
+      input.required = key !== 'note'; input.value = item[key] ?? ''; input.disabled = state.busy;
+      input.addEventListener('input', () => { item[key] = type === 'number' ? Number(input.value) : input.value; setDirty(); });
+      label.append(input); card.append(label);
+    }
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button allowance-remove'; remove.textContent = 'Remove ' + item.id; remove.disabled = state.busy;
+    remove.addEventListener('click', () => removeAllowance(item.id)); card.append(remove); list.append(card);
+  }
+}
+
+function addAllowance(kind) {
+  if (state.busy || draftAllowances.length >= 100) return;
+  const ids = [...draftAllowances.map(item => item.id), ...reservedAllowanceIds, ...comparison.revisions.flatMap(record => (record.settings?.allowances || []).map(item => item.id))];
+  const next = ids.reduce((maximum, id) => /^AL[1-9]\d{0,5}$/.test(id) ? Math.max(maximum, Number(id.slice(2))) : maximum, 0) + 1;
+  if (next > 999999) { errorMessage('No allowance IDs remain.'); return; }
+  const item = { id: 'AL' + next, kind, description: kind === 'prime_cost' ? 'Prime cost allowance' : 'Provisional sum allowance', amount: 0, note: '' };
+  reservedAllowanceIds.add(item.id); draftAllowances.push(item); renderAllowances(); setDirty();
+}
+
+function removeAllowance(id) {
+  if (state.busy) return;
+  draftAllowances = draftAllowances.filter(item => item.id !== id); renderAllowances(); setDirty();
 }
 
 function updateSwatches() {
@@ -70,16 +112,17 @@ function setDirty(syncPlan = true) {
   $('#sync-status').classList.toggle('pending', state.dirty);
   $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
   setDownloadLinks();
-  $('#comparison-draft-note').hidden = !state.dirty;
+  $('#comparison-draft-note').hidden = !state.dirty; setComparisonDownloads();
 }
 
 function setBusy(value) {
   state.busy = value;
-  form.querySelectorAll('input, select, button').forEach(element => { element.disabled = value; });
+  form.querySelectorAll('input, select, textarea, button').forEach(element => { element.disabled = value; });
   $('#load-settings').disabled = value;
   planEditor?.setBusy(value);
   document.body.classList.toggle('busy', value);
   $('#build-button').disabled = value;
+  $('#add-pc-allowance').disabled = value || draftAllowances.length >= 100; $('#add-ps-allowance').disabled = value || draftAllowances.length >= 100;
   $('#build-label').textContent = value ? 'Updating house & documents…' : 'Update house & documents';
   $('#house-form').setAttribute('aria-busy', String(value));
   if (value) {
@@ -198,6 +241,7 @@ function renderPurchasing(result) {
     const tr = document.createElement('tr');
     const item = document.createElement('td'); const code = document.createElement('strong'); code.textContent = row.code || 'Item code not recorded'; item.append(code);
     const description = document.createElement('p'); description.textContent = row.description || 'Description not recorded'; item.append(description);
+    if (row.group_name) { const scope = document.createElement('small'); scope.textContent = 'Scope: ' + row.group_name; item.append(scope); }
     if (row.rate_origin || row.rate_source || row.rate_effective_date) {
       const basis = document.createElement('small'); basis.textContent = [row.rate_origin, row.rate_source, row.rate_effective_date].filter(Boolean).join(' | '); item.append(basis);
     }
@@ -412,12 +456,62 @@ function comparisonError(message) {
   $('#comparison-error').hidden = !message;
 }
 
+function clientQuoteMatches(result, pair = comparisonPair()) {
+  const quote = result?.quote?.public;
+  if (!quote || quote.currency !== 'AUD' || result.currency !== 'AUD' || result.before_revision !== pair.before || result.after_revision !== pair.after || quote.before_revision !== pair.before || quote.after_revision !== pair.after) return false;
+  const url = downloadURL(result.files?.client_quote_pdf);
+  if (!url || typeof result.comparison_id !== 'string' || !result.comparison_id.startsWith(pair.before + '_' + pair.after + '_')) return false;
+  return new URL(url).pathname === '/changes/' + result.comparison_id + '/client-variation-quote.pdf';
+}
+
+function renderClientQuote(result) {
+  const quote = result?.quote?.public; const section = $('#client-quote-summary');
+  const valid = quote && quote.currency === 'AUD' && result.currency === 'AUD' && quote.before_revision === result.before_revision && quote.after_revision === result.after_revision;
+  section.hidden = !valid;
+  if (!valid) return;
+  const totals = quote.totals || {}; const currency = quote.currency;
+  $('#quote-saved-revisions').textContent = `Saved A ${quote.before_revision} to B ${quote.after_revision}; pricing is from saved revision B.`;
+  $('#quote-reference').textContent = quote.quote_reference || 'Draft variation quote';
+  $('#quote-builder').textContent = quote.builder_name || 'Builder name not supplied';
+  const description = (quote.client_description || '').trim();
+  $('#quote-description').textContent = description; $('#quote-description').hidden = !description;
+  $('#quote-credit-policy').textContent = quote.credit_policy || '';
+  $('#quote-dates').textContent = `Issued ${quote.issued_on || 'not set'}; valid until ${quote.valid_until || 'not set'}.`;
+  const scope = $('#quote-scope'); scope.replaceChildren();
+  const scopeLines = [...new Set((quote.scope || []).map(text => String(text).trim()).filter(text => text && text !== description))]; scope.hidden = scopeLines.length === 0;
+  for (const text of scopeLines) { const item = document.createElement('li'); item.textContent = text; scope.append(item); }
+  const waterfall = $('#quote-waterfall'); waterfall.replaceChildren();
+  for (const [key, label] of [
+    ['additions_at_cost', 'Changes at cost - additions'], ['credits_at_cost', 'Changes at cost - credits'],
+    ['at_cost_delta', 'Net changes at cost'], ['additions_markup', 'Overhead and margin on additions'],
+    ['credits_markup', 'Overhead and margin credit'], ['markup_amount', (quote.markup_label || 'Combined overhead and margin (markup on cost)') + (quote.overhead_margin_percent === undefined ? '' : ' (' + quote.overhead_margin_percent + '%)')],
+    ['admin_fee', 'Administration fee'], ['subtotal_ex_gst', 'Quote subtotal excluding GST'],
+    ['gst_amount', 'GST (' + (totals.gst_rate ?? 10) + '%)'], ['total_incl_gst', 'Client quote total including GST'],
+  ]) {
+    const term = document.createElement('dt'); term.textContent = label;
+    const value = document.createElement('dd');
+    const deduction = key === 'credits_at_cost' || key === 'credits_markup';
+    const amount = deduction && totals[key] > 0 ? -totals[key] : totals[key];
+    value.textContent = amount === undefined ? 'Not recorded' : money(amount, currency);
+    if (key === 'total_incl_gst') { term.className = 'quote-total'; value.className = 'quote-total'; }
+    waterfall.append(term, value);
+  }
+  const allowanceRows = [...(quote.pc_allowances || []).map(row => ({ ...row, label: 'PC' })), ...(quote.ps_allowances || []).map(row => ({ ...row, label: 'PS' }))];
+  const lines = $('#quote-allowance-lines'); lines.replaceChildren(); $('#quote-no-allowances').hidden = allowanceRows.length > 0;
+  for (const row of allowanceRows) {
+    const line = document.createElement('tr');
+    for (const value of [`${row.label} / ${row.id}`, row.description, money(row.before, currency), money(row.after, currency), signedMoney(row.movement, currency), row.notes || '']) { const cell = document.createElement('td'); cell.textContent = value; line.append(cell); }
+    lines.append(line);
+  }
+}
+
 function setComparisonDownloads() {
   const pair = comparisonPair();
   const matches = comparison.result && comparison.result.before_revision === pair.before && comparison.result.after_revision === pair.after;
   document.querySelectorAll('[data-change-file]').forEach(link => {
     const url = downloadURL(comparison.result?.files?.[link.dataset.changeFile]);
-    const enabled = Boolean(matches && !comparison.busy && !state.busy && url);
+    const isClientQuote = link.dataset.clientQuote === 'true';
+    const enabled = Boolean(matches && !comparison.busy && !state.busy && url && (!isClientQuote || (!state.dirty && clientQuoteMatches(comparison.result, pair))));
     link.classList.toggle('disabled', !enabled);
     link.setAttribute('aria-disabled', String(!enabled));
     if (enabled) { link.href = url; link.setAttribute('download', ''); link.tabIndex = 0; }
@@ -425,6 +519,7 @@ function setComparisonDownloads() {
   });
   $('#compare-button').disabled = comparison.busy || !pair.before || !pair.after;
   $('#compare-button').textContent = comparison.busy ? 'Comparing...' : 'Compare revisions';
+  $('#client-quote-export-note').textContent = state.dirty ? 'Pending edits must be saved as a new revision before exporting the client quote. The summary still uses the selected saved A and B.' : !matches ? 'Compare the selected saved revisions to prepare the client quote.' : clientQuoteMatches(comparison.result, pair) ? 'Client PDF uses only the selected saved revisions and the client quote summary; internal itemised records are separate.' : 'Client quote PDF is unavailable for this comparison. Client quotes require saved AUD revisions and a matching client export.';
 }
 
 function selectedComparisonChanged() {
@@ -432,7 +527,7 @@ function selectedComparisonChanged() {
   comparison.request += 1;
   comparison.busy = false;
   comparison.result = null;
-  $('#comparison-result').hidden = true;
+  $('#comparison-result').hidden = true; $('#client-quote-summary').hidden = true;
   $('#change-ready-dot').hidden = true;
   $('#comparison-status').textContent = 'Select Compare revisions to capture this A to B change.';
   comparisonError('');
@@ -499,7 +594,7 @@ async function compareSavedRevisions() {
   if (!pair.before || !pair.after) return;
   const request = ++comparison.request;
   comparison.busy = true;
-  $('#comparison-result').hidden = true;
+  $('#comparison-result').hidden = true; $('#client-quote-summary').hidden = true;
   $('#change-ready-dot').hidden = true;
   comparisonError('');
   $('#comparison-status').textContent = 'Comparing descriptions, quantities and unit rates...';
@@ -523,7 +618,7 @@ async function compareSavedRevisions() {
 }
 
 function renderComparison(result) {
-  comparison.result = result;
+  comparison.result = result; renderClientQuote(result);
   const totals = result.totals || {};
   const currency = result.currency || 'AUD';
   $('#comparison-result').hidden = false;
@@ -736,6 +831,8 @@ $('#compare-before').addEventListener('change', selectedComparisonChanged);
 $('#compare-after').addEventListener('change', selectedComparisonChanged);
 $('#compare-button').addEventListener('click', compareSavedRevisions);
 document.querySelectorAll('[data-change-file]').forEach(link => link.addEventListener('click', event => { if (link.getAttribute('aria-disabled') === 'true') event.preventDefault(); }));
+$('#add-pc-allowance').addEventListener('click', () => addAllowance('prime_cost'));
+$('#add-ps-allowance').addEventListener('click', () => addAllowance('provisional_sum'));
 fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); syncRatePanelOverrides(); setDirty(); }));
 Object.values(overrideFields).forEach(id => $(id).addEventListener('input', updateOverrideHints));
 document.querySelectorAll('[data-reset-override]').forEach(button => button.addEventListener('click', () => resetRateOverride(button.dataset.resetOverride)));
@@ -762,9 +859,10 @@ $('#load-settings').addEventListener('change', async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 256 * 1024) throw new Error('Please choose a House Sync design JSON up to 256 KiB.');
+    if (file.size > 4194304) throw new Error('Please choose a House Sync design JSON no larger than 4 MiB.');
     const parsed = JSON.parse(await file.text()); const settings = parsed.settings || parsed;
     if (!settings.project_name || !Number.isFinite(settings.length_mm) || !Number.isFinite(settings.width_mm) || !Number.isFinite(settings.height_mm) || !Number.isFinite(settings.wall_thickness_mm) || !/^#[0-9a-f]{6}$/i.test(settings.paint_hex)) throw new Error('This file is missing valid house dimensions or a paint colour.');
+    if (settings.allowances !== undefined && !Array.isArray(settings.allowances)) throw new Error('Allowances must be a list of PC/PS items.');
     if (settings.openings !== undefined && !Array.isArray(settings.openings)) throw new Error('Opening data must be an array of doors/windows.');
     fillForm(settings); setDirty(); errorMessage(''); $('#form-status').textContent = 'Design loaded. Review the plan and update to generate its model and documents.';
   } catch (error) { errorMessage(error.message); }
@@ -772,7 +870,7 @@ $('#load-settings').addEventListener('change', async event => {
 });
 
 function initialFormLoading(value) {
-  form.querySelectorAll('input, select, button').forEach(element => { element.disabled = value; });
+  form.querySelectorAll('input, select, textarea, button').forEach(element => { element.disabled = value; });
   $('#load-settings').disabled = value;
 }
 
