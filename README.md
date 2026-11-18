@@ -14,6 +14,7 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
+- A **Purchasing** tab downloads one fillable draft purchase-order PDF per saved BOQ item, or all item PDFs in a ZIP. It uses the saved revision's quantities and prices.
 
 ## Edit directly from the plan
 
@@ -36,6 +37,16 @@ Select **Export variation order PDF** to download a draft variation order for th
 The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
 The comparison separates gross quantity effects (including coat count and wastage changes) from rate effects and reconciles them to rounded BOQ amounts. Where both saved revisions have a recorded library/override basis, the rate effect is also attributed to library changes and override changes. Historical rows without that evidence retain an unknown attribution instead of an invented split. Missing new settings in older designs receive defaults when loaded and compared; saved revision BOQs and amounts remain immutable. Positive and negative item differences are shown as additions and omissions. Different currencies cannot be compared without an explicit exchange-rate policy. This is an estimate comparison of the modelled BOQ scope; demolition, rework, abortive work, fees, taxes and programme impacts are excluded unless added to the model and rates. It is not an approved contractual variation valuation.
+
+## Prepare draft purchase orders
+
+Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The default BOQ produces eleven item PDFs; older saved revisions use the BOQ rows they actually contain.
+
+Each PDF identifies the saved house revision and has a code-based PO reference. Its description, gross priced quantity, unit, rate, currency and amount come from that revision's saved BOQ. The exporter does not read today's library to reprice an older revision. For older BOQs without a separate gross quantity field, their saved priced quantity remains the basis.
+
+Quantities retain their BOQ pricing units. For example, a paint quantity expressed in m2 per coat is not a paint volume; the application does not infer tins, packs, litres, coverage rates or supplier order increments. Default prices remain **illustrative AUD rates, not a tender estimate**.
+
+After downloading, open the PDF in a viewer that supports fillable forms and enter the buyer, supplier, required-by, delivery and approval details. These are draft fields for review; filling them does not update the model or approve/send an order. The application does not contact suppliers or place purchases. Pending house edits must be saved before downloading a coordinated purchasing set.
 
 ## Run on Windows
 
@@ -153,10 +164,10 @@ The BOQ now includes the slab, masonry, flat roof, opening allowances and five f
 | [Decisions](docs/house-sync-decisions.md) | Geometry, measurement and revision decisions |
 
 ~~~powershell
-.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py tests/test_rate_library.py tests/test_housesync_rate_design.py tests/test_housesync_rate_workflow.py tests/test_housesync_rate_provenance.py -q
+.venv\Scripts\pytest.exe tests/test_housesync_engine.py tests/test_housesync_boq.py tests/test_housesync_documents.py tests/test_housesync_server.py tests/test_housesync_changes.py tests/test_housesync_plan.py tests/test_rate_library.py tests/test_housesync_rate_design.py tests/test_housesync_rate_workflow.py tests/test_housesync_rate_provenance.py tests/test_housesync_purchasing.py -q
 .venv\Scripts\ruff.exe check .
 Get-ChildItem housesync/static -Filter *.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
-node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor.test.mjs
+node --test tests/plan-core.test.mjs tests/plan-editor.test.mjs tests/boq-editor.test.mjs tests/purchasing.test.mjs
 ~~~
 
 Windows uses build123d 0.10 to avoid an import failure caused by scanning an invalid Windows font with 0.11. The generation lock includes a Windows msvcrt implementation. Linux/macOS use build123d 0.11, preserving the advanced geometry API and Python 3.13 compatibility used by the upstream test suite.
