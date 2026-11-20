@@ -8,7 +8,7 @@ A client moves a wall before construction. The drafter revises the drawings and 
 
 ## What House Sync does
 
-Updating one shared model regenerates the drafter’s drawings and specification. The estimator compares the previous design (A) with the proposed design (B) to price the variation and prepare a draft variation order. The scheduler gets B’s BOQ. Purchasing turns its saved BOQ line items into draft orders. Every document carries B’s revision ID, and the variation order also identifies A.
+The drafter updates the shared model to regenerate the drawings and specification. The estimator compares the previous revision (A) with the proposal (B) and prepares a client variation quote. When the client accepts, the scheduler releases B's BOQ and purchasing uses its lines to prepare draft orders. Each document identifies its source revision. The quote identifies both A and B.
 
 ## Who it’s for
 
@@ -26,17 +26,26 @@ flowchart TD
     boq --> orders["Purchasing raises purchase orders"]
 ```
 
-## Status of this introduction
+## Current status
 
-House Sync is a concept application for Australian custom and semi-custom builders. Its prices are **illustrative AUD rates, not a tender estimate**.
+AUD trade pricing, the CSV rate library, room-based BOQs, draft purchase orders and client variation quotes are available on `main`. House Sync remains a local concept application with **illustrative AUD rates, not a tender estimate**.
 
-This introduction was proposed in PR #5 while the AUD trades, CSV rate library, purchasing and room features were in review. The original SGD single-room prototype is historical context. The technical guide below retains the room and purchasing documentation from PR #4 and the client quote documentation from PR #6 for their integration. Feature-specific verification records are identified separately; they are not a combined test result.
+The model supports a single-storey rectangular shell, optional orthogonal partitions, stable named rooms and room finish selections. A successful update coordinates the 3D model, IFC, dimensioned drawings, technical specification and grouped BOQ. Saved A/B revisions drive the internal cost comparison and client variation quote. Purchasing exports draft orders from the selected revision's saved BOQ.
 
-The application calculates the proposed BOQ when the drafter updates the model. Client acceptance, release of an accepted BOQ and issue of supplier orders remain decisions the builder manages. Filling an exported form does not approve a variation or send an order.
+The BOQ is ready for review as soon as the drafter updates the design. The builder records client acceptance, releases the accepted BOQ and issues supplier orders through their existing process.
+
+## How the four roles work together
+
+| Role | Work in House Sync | Handoff |
+|---|---|---|
+| Drafter | Edit the shell, partitions, openings and room finishes. Check geometry and access, then publish the revision | Drawings, specification, IFC and model revision for estimating |
+| Estimator | Compare A with B and review quantities, rates, margin, fees, credits and allowances | Client variation quote and private itemised breakdown |
+| Scheduler | Confirm which revision the client accepted and release its shell and room BOQ | Quantities and revision ID for purchasing |
+| Purchasing | Check units and gross quantities. Download individual draft orders or the full ZIP and enter supplier and delivery details | Orders ready for the builder to issue |
 
 Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The original MIT licence, source, examples and Git history are retained. Read the [original homespec README](HOMESPEC_README.md) for its compiler and Blender workflows.
 
-## First version
+## Available capabilities
 
 - A single-storey rectangular shell with a flat roof. The default design opens as one room with one door and two windows. Orthogonal partitions divide the shell into named rooms.
 - Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
@@ -103,11 +112,34 @@ Adding a PC allowance of AUD 500 and a PS allowance of AUD 1,000 to revision B l
 
 Reversing the extension with the default zero fee gives a **credit of AUD 9,141.00 including GST** under **Credit at cost**. Selecting **Credit including margin** also returns the markup, increasing the credit to **AUD 10,969.20**. For a mixture of additions and omissions, the quote calculates markup on additions and applies the selected treatment to credits before calculating GST.
 
+### Worked quote for adding a study
+
+Use the two-room partition and access door in the worked takeoff below, with the selected room descriptions and unchanged trade rates, the checked-in AUD library, no project overrides, a 20% combined markup, zero administration fee and no PC/PS changes. Revision A is the original 10 × 8 m room; revision B has partition P1 and its door. The BOQ rises from AUD 53,330.22 to AUD 57,038.34.
+
+| Variation component | AUD |
+|---|---:|
+| Additions at cost | 3,803.12 |
+| Credits at cost | (95.00) |
+| **Net measured cost change** | **3,708.12** |
+| Combined overhead and margin on additions | 760.62 |
+| Fixed administration fee | 0.00 |
+| **Subtotal excluding GST** | **4,468.74** |
+| GST at 10% | 446.87 |
+| **Client variation including GST** | **4,915.61** |
+
+Selecting **Credit including margin** also returns AUD 19.00 of markup with the credits, reducing the same quote to **AUD 4,894.71 including GST**. Reversing the design gives a credit of **AUD 4,058.03** with credits at cost, or **AUD 4,894.71** with markup returned. These figures use the recorded additions and credits separately. Equivalent finish scope continues across the change from shared to room-grouped BOQ rows.
+
+### Continue the room design
+
+Keeping P1 fixed at x = 4000 mm while extending the two-room shell from 10 m to 12 m raises its BOQ from **AUD 57,038.34 to AUD 65,348.34**. The Study remains 31.600 m² and Living grows from 47.600 m² to 63.600 m². The cost increase is AUD 8,310.00 and the default client quote is **AUD 10,969.20 including GST**. Both revisions produce eighteen draft purchase orders from their complete saved BOQs.
+
+Adding P2 to the original two-room 10 × 8 m design produces the three-room T-junction example below. That transition has AUD 2,905.22 of additions and AUD 70.66 of credits, giving a net cost change of AUD 2,834.56. With the same 20% markup, zero fee and credits at cost, the client variation is **AUD 3,757.16 including GST**. Its full saved BOQ is AUD 59,872.90 and produces twenty-four draft purchase orders.
+
 ## Prepare draft purchase orders
 
-Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The default BOQ produces eleven item PDFs; older saved revisions use the BOQ rows they actually contain.
+Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The default BOQ produces eleven item PDFs. The verified two-room worked example produces eighteen and the three-room example twenty-four. Older saved revisions use the BOQ rows they actually contain.
 
-Each PDF identifies the saved house revision and has a code-based PO reference. Its description, gross priced quantity, unit, rate, currency and amount come from that revision's saved BOQ. The exporter does not read today's library to reprice an older revision. For older BOQs without a separate gross quantity field, their saved priced quantity remains the basis.
+The set covers the selected revision's complete BOQ and is separate from the A-to-B client variation quote. Each PDF identifies the saved house revision and has a code-based PO reference. Its description, gross priced quantity, unit, rate, currency and amount come from that revision's saved BOQ. The exporter does not read today's library to reprice an older revision. For older BOQs without a separate gross quantity field, their saved priced quantity remains the basis.
 
 Quantities retain their BOQ pricing units. For example, a paint quantity expressed in m2 per coat is not a paint volume; the application does not infer tins, packs, litres, coverage rates or supplier order increments. Default prices remain **illustrative AUD rates, not a tender estimate**.
 
@@ -163,6 +195,20 @@ Each generated revision saves the library's full SHA-256 over its raw CSV bytes 
 
 Existing designs with explicit stored rates retain those values as overrides rather than silently adopting the current library. Older pre-finishes designs in another currency may not contain prices for every new trade: they can be opened, but missing values or a matching-currency library must be supplied before building. Saved BOQs remain authoritative for historical comparisons, and different currencies still cannot be compared.
 
+## Generated example guide
+
+Use the checked-in AUD library, two paint coats, default wastage and no project overrides to reproduce the detailed examples below. BOQ amounts are measured internal costs excluding GST. Client quote amounts separately apply the proposed revision's commercial settings.
+
+| Example | Clear room finish area | BOQ subtotal excluding GST | Client quote example |
+|---|---:|---:|---|
+| Default 10 × 8 m shell, one room | 80.000 m² | AUD 53,330.22 | Baseline revision A |
+| Extend the shell to 12 × 8 m | 96.000 m² | AUD 61,640.22 | AUD 10,969.20 including GST for the A-to-B variation with default commercial settings |
+| Add P1 and its access door for two rooms | 79.200 m² | AUD 57,038.34 | AUD 4,915.61 including GST from the default one-room revision, with credits at cost |
+| Add P2 and its access door for three rooms | 78.605 m² | AUD 59,872.90 | AUD 8,672.79 including GST from the default one-room revision, with credits at cost |
+| Extend the two-room layout to 12 × 8 m, keeping P1 at x = 4 m | 95.200 m² | AUD 65,348.34 | AUD 10,969.20 including GST from the two-room 10 × 8 m revision |
+
+The worked quote section also shows a fixed fee, PC/PS movements and credit treatment. A room variation can contain both additions and omissions. The quote uses the saved item movements to apply the selected margin treatment to each.
+
 ## A change you can verify
 
 The default house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. One 1.0 x 2.1 m door and two 1.5 x 1.2 m windows deduct **5.7 m2** from each set of wall faces. These hand calculations check the compiled model quantities:
@@ -199,7 +245,9 @@ The default library gives doors and windows the same AUD 650 allowance in separa
 
 ## Worked partition takeoff
 
-Start with the default 10 × 8 m clear shell, 3 m walls and the original exterior openings. Dimensions below use the south-west inside corner as the origin. Run a 100 mm partition P1 from (4000, 0) to (4000, 8000) mm. Give it a 1000 × 2100 mm door starting 1500 mm from its first endpoint. For a third room, add a 100 mm partition P2 from (4000, 3000) to (10000, 3000) mm and a second 1000 × 2100 mm internal door near its centre.
+Start with the default 10 × 8 m clear shell, 3 m walls and the original exterior openings. Dimensions below use the south-west inside corner as the origin. Run a 100 mm partition P1 from (4000, 0) to (4000, 8000) mm. Give it a 1000 × 2100 mm door starting 1500 mm from its first endpoint. For a third room, add a 100 mm partition P2 from (4000, 3000) to (10000, 3000) mm and a second 1000 × 2100 mm internal door starting 1500 mm from P2's first endpoint.
+
+In the generated check, the west room is named **Study** and the east room **Living**. With P2 added, the south-east room is **Kitchen** and the north-east room **Living**. All rooms use the descriptive floor selection **Selected oak floor** and paint selection **Selected warm white**, with ceiling and skirting inherited. These descriptive selections use the same illustrative trade rates.
 
 | Layout and room | Clear dimensions (m) | Floor and ceiling (m² each) | Clear perimeter (m) | Skirting (m) | Internal plaster and measured paint (m² each) |
 |---|---|---:|---:|---:|---:|
@@ -266,15 +314,19 @@ Verification for the rate library passed **196 House Sync Python tests**, **38 J
 
 In a live Chrome session, overriding the slab rate from AUD 95 to 105 increased the estimate by AUD 800. Resetting the override restored the original subtotal. Updating the CSV slab rate to AUD 115 produced an AUD 1,600 library effect and a zero override effect.
 
-The wider non-Blender tests have 20 existing Windows failures or errors matching the unchanged baseline by test ID. Seven involve symlink privileges, twelve involve advanced geometry and one involves a retained-camera source hash. Blender integration was not run locally.
+On merged `main` (`04ed75b`), the full Windows non-Blender run had 830 passes, 17 failures and three errors. All 20 affected test IDs match the pre-integration baseline. Seven involve symlink privileges, twelve involve advanced geometry and one involves a retained-camera source hash. GitHub Actions passed all 850 non-Blender tests on Ubuntu and all nine Blender integration tests.
 
 The upstream library_room build was verified on this PC with **51 checks passed, zero failed**. Local tests independently compare quantities with rectangular-shell calculations and IFC geometry. Generated PDFs and the recalculated spreadsheet were visually inspected. Word package/content tests pass; native Word/LibreOffice visual rendering was unavailable. Six upstream reliability tests that create symbolic links were blocked by the Windows account's symlink privilege; they are not reported as passes.
 
-### Feature-specific verification before integration
+### Combined application verification
+
+The combined application passed **448 House Sync Python tests and 59 JavaScript tests on Windows**. Repository-wide Ruff and syntax checks for every browser JavaScript file passed. The tests cover compiled rooms and IFC, rate and allowance changes, client/internal quote separation, purchasing, historical compatibility and retained output snapshots. An integrated generation check reproduced the one-room, two-room and three-room figures above, plus the fixed-partition 10 m to 12 m extension. Each 11-, 18- and 24-file purchase-order ZIP passed its integrity check. Every PDF retained its archived gross quantity, rate, amount and revision, and the PO amounts reconciled to that revision's BOQ. Client and internal PDFs were separately checked for each quoted transition. Descriptive finish labels and source/date-only rate updates preserved the quote price when the applied rates were unchanged.
+
+### Earlier feature verification records
 
 The room feature in PR #4 recorded 300 application/rate-library Python tests and 47 JavaScript tests passing on Windows, including T-junctions, differing heights, room holes, named IFC spaces, invalid layouts and legacy comparisons. Its Chrome review covered a partition, hosted access door, room finishes and grouped BOQ.
 
-The quote feature in PR #6 recorded 318 House Sync Python tests and 46 JavaScript tests passing on Windows. It checked signed credits, allowance movements, client/internal PDF separation, immutable quote dates/files after later changes and a Chrome quote workflow. These branch-specific counts are historical evidence, not the count for their combined integration.
+The quote feature in PR #6 recorded 318 House Sync Python tests and 46 JavaScript tests passing on Windows. It checked signed credits, allowance movements, client/internal PDF separation, immutable quote dates/files after later changes and a Chrome quote workflow. These branch-specific counts are retained as historical evidence. The current integration verification is recorded separately.
 
 ## Plan editing audit evidence
 

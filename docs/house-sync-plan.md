@@ -8,11 +8,13 @@ The drafter updates the model, drawings and specification. The estimator compare
 
 The project starts from [homespec](https://github.com/maccman/homespec), an MIT-licensed house modelling and export engine. The original licence, attribution, and source history are retained. House Sync adds a local browser application, validated inputs, pricing allowances, and document exporters.
 
-## Integration context
+## Current status on `main`
 
-This documentation preserves the builder framing introduced in PR #5 and the technical room/purchasing/quote scope from PRs #4 and #6. The original SGD single-room description is historical; it must not be presented as the current default after the AUD features are integrated. Verification recorded below is feature-specific until the combined implementation is checked.
+The delivered local workflow includes AUD trade pricing, the CSV rate library and overrides, constrained plan editing, orthogonal partitions, named rooms, room finish schedules, grouped BOQs, draft purchasing and client variation quotes with separate internal detail. The default is one room in a rectangular shell. Adding partitions creates rooms measured from the same model.
 
-## Implementation scope
+The drafter, estimator, scheduler and purchasing team work from saved revision IDs. The proposed BOQ is calculated with the model update. Client acceptance, BOQ release and supplier issue remain manual builder decisions. Approval and issue registers are planned.
+
+## Delivered scope
 
 The demonstration starts with a single room in a rectangular shell, as a concept house. Default dimensions are **10,000 x 8,000 mm clear internally**, with a 3,000 mm wall height and 200 mm walls. Its external wall footprint is 10,400 x 8,400 mm.
 
@@ -78,7 +80,17 @@ Edit the CSV, use **Refresh rate library** on the **Rates** tab, review values a
 
 The proposed revision B supplies one combined overhead and margin markup, default 20% on cost, a fixed administration fee, default zero, a credit policy and a validity period, default 14 calendar days. PC and PS balances are separate from the measured BOQ and only their A-to-B value movements are priced. Apply markup to aggregate additions; credits are at cost by default or include markup when selected. The fixed fee applies once to any priced movement, including credit-only and offsetting variations, and is never marked up. Identical, editorial and equal-value PC/PS transfers attract no fee. Round each aggregate markup half-up to cents, then signed GST at 10% on the final ex-GST subtotal.
 
-The original 10 m to 12 m example has an AUD 8,310.00 cost increase and an AUD 10,969.20 client variation including GST with default settings. The client PDF shows approved commercial aggregates, plain-English scope and allowance movements; the internal PDF retains private trade detail and rate provenance. The first quote preparation fixes its issue date in UTC, and reopening preserves the saved dates and files. See the README for the full worked quote, credit cases and additional allowance example.
+The original 10 m to 12 m example has an AUD 8,310.00 cost increase and an AUD 10,969.20 client variation including GST with default settings. Adding the worked study partition and door changes the internal cost by AUD 3,708.12. Additions of AUD 3,803.12 and credits of AUD 95.00 give an AUD 4,915.61 client variation including GST with credits at cost. The client PDF shows the commercial totals, scope and allowance movements. The internal PDF also records trade detail and rate sources. The first quote preparation fixes its issue date in UTC, and reopening preserves the saved dates and files. See the README for the full worked quote, credit cases and additional allowance example.
+
+## Verification of the builder workflow
+
+The README provides reproducible baseline, extension and partition takeoffs, with client quote examples using default commercial settings. Integration tests publish a room design, generate its drawings, specification, BOQ and IFC, compare two saved revisions, inspect the client and internal PDFs, and download purchase orders from the same saved BOQ. Historical outputs must remain unchanged after later model, rate, pricing or date changes.
+
+The combined application passed **448 House Sync Python tests and 59 JavaScript tests on Windows**, with repository-wide Ruff and syntax checks for every browser JavaScript file passing. Branch-specific setup evidence below is retained as history and is not added to those counts.
+
+Integrated generation reproduced the default AUD 53,330.22 BOQ, the two-room AUD 57,038.34 BOQ and the three-room AUD 59,872.90 BOQ. The fixed-P1 two-room extension produced AUD 65,348.34 and an AUD 10,969.20 client variation including GST. The two-room to three-room variation was AUD 3,757.16 including GST. The complete revision purchase-order sets contained 11, 18 and 24 PDFs respectively, with saved amounts reconciling to their BOQs. Client and internal quote files were checked separately.
+
+The four-role review checks whether the drafter can explain the model revision, the estimator can reconcile the client price, the scheduler can identify the accepted BOQ, and purchasing can trace every draft order to that revision. Software validation does not supply structural, regulatory or contractual approval.
 
 ## Verification completed during setup
 
@@ -90,7 +102,7 @@ The DOCX package and contents passed structural tests. Visual DOCX rendering was
 
 ## Next features in builder workflow order
 
-| Team | Implemented in this integration | Further work |
+| Team | Available on `main` | Next development priority |
 |---|---|---|
 | 1. Drafter | Constrained shell editing, orthogonal partitions, stable named rooms, room finish schedules, dimensioned plans, IFC and 3D views | Extend beyond orthogonal partitions and rectangular shells. Add per-face finishes and a product palette with physical colour references, substrate, preparation and coating systems. |
 | 2. Estimator | Illustrative AUD trade rates, dated CSV library, project overrides, A-to-B quantity/rate effects, client quotes, fixed fee, credit policy and separate PC/PS movements | Add verified supplier quotations, location context and project-specific tax treatment beyond the fixed quote GST rule. Record the client's decision against the specific priced revision. |
