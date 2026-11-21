@@ -20,17 +20,17 @@ The demonstration starts with a single room in a rectangular shell, as a concept
 
 | Element | Current scope |
 | --- | --- |
-| Walls | Four exterior masonry walls and optional orthogonal internal partitions, with room finish selections |
+| Walls | Four two-leaf exterior brick walls and optional orthogonal internal partitions, with room finish selections |
 | Floor | 150 mm slab within the clear internal room footprint |
 | Roof | 200 mm flat roof with 300 mm overhang beyond the external wall faces |
 | Doors | Editable hosted openings; default D1 is centred on the south wall, 1,000 x 2,100 mm |
 | Windows | Editable hosted openings; defaults N1/N2 are centred north/east, 1,500 x 1,200 mm with 900 mm sill |
-| Editable settings | House dimensions, finish, paint coats, per-item wastage, currency, rate overrides and source/date; stable-ID doors/windows with host, start, width, height and sill |
+| Editable settings | House dimensions, external facebrick or rendered paint, inner brick bare or plastered and painted, paint coats, per-item wastage, currency, rate overrides and source/date; stable-ID doors/windows with host, start, width, height and sill |
 | Plan and browser model | Direct constrained plan edits, snapping, undo/redo and draft review; compiled 3D view |
 | BOQ | Shell and room lines using eleven trade codes, exported to Excel and CSV, with net quantities, wastage, gross priced quantities and row-level rate provenance |
 | Rate library | Editable `rates/rates_aud.csv`, one source/date per BOQ code, library snapshot SHA-256, optional project overrides |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
-| Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
+| Drawings | Live draft floor plan, four exterior elevations and opening schedule, with SVG and PDF exports for each saved revision |
 | Client variation quote | Proposed revision's markup, fee, credit policy, PC/PS movements, signed GST and validity; separate client/internal PDFs |
 | Purchasing | Fillable draft PDF per saved BOQ row or complete ZIP, without repricing a historical revision |
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |
@@ -60,9 +60,9 @@ The local server and browser interface integrate these components. The README co
 | Wall volume | Final compiled wall volume after opening cuts; corner returns counted once |
 | Equivalent net wall area | Wall volume divided by wall thickness, retained for the uniform rectangular shell |
 | Skirting | Compiled internal room perimeter minus the widths of compiled door openings |
-| Internal plaster/render | Net internal vertical wall faces, deducting compiled opening voids |
-| External render | Net external vertical wall faces, deducting compiled opening voids |
-| Measured paint area | Combined internal and external net vertical wall faces; excludes reveals, sills, soffits and floor/roof/ceiling painting |
+| Internal plaster/render | Net selected shell inner faces and exposed partition faces, deducting compiled opening voids |
+| External render | Net outer faces for the rendered option, deducting compiled opening voids |
+| Measured paint area | Net vertical wall faces selected for paint; excludes reveals, sills, soffits and floor/roof/ceiling painting |
 | Roof area | Compiled flat roof top surface, including the 300 mm overhang |
 | Door/window counts | Parent products only; emitted frame, leaf and glazing parts do not add products |
 
@@ -70,7 +70,9 @@ The paint quantity applies an editable coat multiplier, default 2, to the measur
 
 New designs default to AUD. `rates/rates_aud.csv` supplies one rate for each of the eleven BOQ codes, with independent door and window rows. The columns are `code`, `description`, `unit`, `rate`, `currency`, `source`, `effective_date` and `notes`. The shipped rows are **illustrative AUD rates, not a tender estimate**, dated 2026-11-17; they do not represent supplier quotes. Each modern design may override selected codes, retaining override source/date separately. Blank overrides follow the library; explicit zero is a zero-cost override. Taxes, preliminaries, foundations, services and unmodelled work remain excluded.
 
-For the default geometry, check quantities are 80.000 m2 clear floor/finish/ceiling area, 20.940 m3 net wall volume, 35.000 m skirting, 102.300 m2 internal plaster/render, 107.100 m2 external render, 209.400 m2 measured paint area (418.800 m2 at two coats), 99.000 m2 roof area, one door and two windows. At default wastage and rates, the subtotal is **AUD 53,330.22**. Increasing the length to 12 m gives **AUD 61,640.22**, a difference of **AUD 8,310.00**; the README contains the itemised worked example.
+A new 10 × 8 m design uses exposed facebrick outside and plaster and paint inside. It has 107.100 m² of outer facebrick, 102.300 m² to paint and an illustrative BOQ subtotal of AUD 46,904.22. Bare common brick inside brings the subtotal to AUD 42,055.20. Partitions retain their scheduled finishes. The 12 × 8 m facebrick design with plaster and paint inside costs AUD 54,494.22 at the same rates.
+
+For the rendered reference design, check quantities are 80.000 m2 clear floor/finish/ceiling area, 20.940 m3 net wall volume, 35.000 m skirting, 102.300 m2 internal plaster/render, 107.100 m2 external render, 209.400 m2 measured paint area (418.800 m2 at two coats), 99.000 m2 roof area, one door and two windows. At default wastage and rates, the subtotal is **AUD 53,330.22**. Increasing the length to 12 m gives **AUD 61,640.22**, a difference of **AUD 8,310.00**; the README contains the itemised worked example.
 
 Older designs retain explicitly saved rates as overrides and retain their currency. Pre-finishes designs may lack new item prices: when the current library has another currency, supply all missing rates or select a matching-currency library before building. Saved revision BOQs are never repriced or rewritten; comparisons still use their recorded amounts and reject different currencies. Coat or wastage edits affect the quantity component. With a known library basis in both revisions, rate effects are attributed first to library changes holding old overrides, then to override changes at the new library and quantity. Historical missing basis remains unknown.
 

@@ -18,15 +18,18 @@ const library = (sha = 'a'.repeat(64), floorRate = 95) => ({ sha256: sha, curren
 
 // Run the real app form, reset and table functions against a small DOM without a renderer.
 class Element {
-  constructor() { this.value = ''; this.children = []; this.options = []; this.textContent = ''; this.classList = { toggle() {}, add() {}, remove() {} }; this.listeners = {}; this.attributes = {}; }
+  constructor(tagName) { this.tagName = tagName; this.value = ''; this.children = []; this.options = []; this.textContent = ''; this.style = {}; this.classList = { toggle() {}, add() {}, remove() {} }; this.listeners = {}; this.attributes = {}; }
   set value(value) { this._value = String(value); }
   get value() { return this._value; }
   set id(value) { this._id = value; elements.set('#' + value, this); }
   get id() { return this._id; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   trigger(name) { this.listeners[name]?.({ target: this }); }
   append(...children) { this.children.push(...children); }
+  prepend(...children) { this.children.unshift(...children); }
+  querySelectorAll(tagName) { return this.children.filter(child => child.tagName === tagName); }
   replaceChildren(...children) { this.children = children; }
 }
 const elements = new Map();
@@ -38,16 +41,21 @@ for (const match of html.matchAll(/<input\b[^>]*\bid="([^"]+)"[^>]*>/g)) {
 const currency = new Element(); currency.value = 'AUD'; currency.options = ['AUD', 'SGD', 'MYR', 'USD', 'GBP'].map(value => ({ value })); elements.set('#currency', currency);
 globalThis.document = {
   querySelector(selector) { if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector); },
-  querySelectorAll() { return []; }, createElement() { return new Element(); },
+  querySelectorAll() { return []; }, createElement(tagName) { return new Element(tagName); },
 };
+// Capture the preview's RGB writes without requiring WebGL in the Node suite.
+class TestColour {
+  constructor(hex) { this.rgb = hex.slice(1).match(/../g).map(pair => Number.parseInt(pair, 16)); }
+  toArray(array, offset) { array.set(this.rgb, offset); }
+}
 const appSource = (await readFile(new URL('../housesync/static/app.js', import.meta.url), 'utf8'))
-  .replace("import * as THREE from 'three';", 'const THREE = { Vector3: class {} };')
+  .replace("import * as THREE from 'three';", `const THREE = { Vector3: class {}, Color: ${TestColour.toString()} };`)
   .replace("import { OrbitControls } from '/vendor/OrbitControls.js';", '')
   .replace("import { PlanEditor } from './plan-editor.js';", '')
   .replace("from './plan-core.js'", "from '" + coreURL + "'")
   .split("form.addEventListener('submit', buildHouse);")[0]
-  + '\nexport { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison };';
-const { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison } = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
+  + '\nexport { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison, setDirty, viewer, legacyWallFaceSlots };';
+const { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison, setDirty, viewer, legacyWallFaceSlots } = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
 
 test('legacy entered rates migrate to independent overrides without inventing missing trade rates', () => {
   const legacy = fixture(); const normalized = normalizeBoqSettings(legacy);
@@ -65,6 +73,144 @@ test('explicit empty overrides keep a modern design library-driven despite a sta
   fillForm(normalized); const submitted = settingsFromForm();
   assert.deepEqual(submitted.rate_overrides, {}); assert.equal(submitted.rates, undefined);
   for (const [code] of RATE_ITEMS) assert.equal(document.querySelector('#override-' + code.toLowerCase().replaceAll('_', '-')).value, '');
+});
+
+test('sidebar saves each leaf independently and restores its controls when a design is reopened', () => {
+  const design = { ...modern(), exterior_finish: { kind: 'facebrick', name: 'Charcoal', hex: '#575656' } };
+  fillForm(design);
+  assert.equal(document.querySelector('#exterior-name').attributes.list, 'brick-product-names');
+  document.querySelector('#paint-hex').value = '#F3EDE0';
+  document.querySelector('#paint-colour').value = 'Warm white';
+  const painted = settingsFromForm();
+  assert.deepEqual(painted.exterior_finish, design.exterior_finish);
+  fillForm({ ...painted, inner_leaf_finish: 'bare_brick', inner_brick_hex: '#B68061' });
+  assert.equal(document.querySelector('#bare-brick-controls').hidden, false);
+  assert.equal(document.querySelector('#interior-paint-controls').hidden, true);
+  assert.equal(document.querySelector('#paint-coats-field').hidden, true);
+  const bare = settingsFromForm();
+  assert.deepEqual(bare.exterior_finish, design.exterior_finish);
+  assert.equal(bare.inner_brick_hex, '#B68061');
+  fillForm({ ...bare, inner_leaf_finish: 'plaster_paint' });
+  assert.equal(document.querySelector('#interior-paint-controls').hidden, false);
+  assert.equal(settingsFromForm().paint_hex, '#F3EDE0');
+});
+
+test('editing a finish updates only its rendered surfaces before save, including undo and label-only edits', t => {
+  const saved = { ...modern(), exterior_finish: { kind: 'facebrick', name: 'Terracotta', hex: '#AD684F' } };
+  const snapshot = { revision: 'original', settings: structuredClone(saved) };
+  const attribute = { array: new Uint8Array(27) };
+  const shell = { userData: { id: 'W1', kind: 'wall', faceSlots: [2, 0, 1], savedColours: ['#AD684F', '#ADD8E6', '#B88465'] },
+    geometry: { getAttribute: name => { assert.equal(name, 'color'); return attribute; } } };
+  const partition = { userData: { kind: 'wall', partition: true, savedColour: '#ADD8E6' },
+    material: { color: { set(value) { this.value = value; } } } };
+  const nonWall = { userData: { kind: 'roof' } };
+  state.result = snapshot; viewer.parts = [shell, partition, nonWall]; viewer.selected = shell; viewer.selectedFace = 1;
+  t.after(() => { state.result = null; state.dirty = false; viewer.parts = []; viewer.selected = null; viewer.finishKey = null; });
+  const readTriangle = face => Array.from({ length: 3 }, (_, vertex) => {
+    const i = (face * 3 + vertex) * 3;
+    return '#' + [...attribute.array.subarray(i, i + 3)].map(channel => channel.toString(16).padStart(2, '0')).join('').toUpperCase();
+  });
+  const check = (brick, outside, inside, paint) => {
+    for (const [face, hex] of [brick, outside, inside].entries()) assert.deepEqual(readTriangle(face), [hex, hex, hex]);
+    assert.equal(partition.material.color.value, paint);
+  };
+  fillForm(saved);
+  document.querySelector('#exterior-hex').value = '#575656';
+  document.querySelector('#exterior-name').value = 'Charcoal';
+  setDirty();
+  check('#B88465', '#575656', '#ADD8E6', '#ADD8E6');
+  assert.match(document.querySelector('#selected-element').textContent, /W1.*External.*Charcoal/);
+  assert.equal(document.querySelector('#save-settings').disabled, true);
+  assert.equal(state.dirty, true);
+  const coloured = settingsFromForm();
+  fillForm({ ...coloured, paint_hex: '#F3EDE0', inner_leaf_finish: 'bare_brick', inner_brick_hex: '#915B44' }); setDirty(false);
+  check('#915B44', '#575656', '#915B44', '#F3EDE0');
+  attribute.needsUpdate = false;
+  document.querySelector('#exterior-name').value = 'Selected facebrick'; setDirty();
+  assert.match(document.querySelector('#selected-element').textContent, /Selected facebrick/);
+  assert.equal(attribute.needsUpdate, false);
+  // The plan history and JSON import both restore the complete draft through fillForm.
+  fillForm(coloured); setDirty(false);
+  check('#B88465', '#575656', '#ADD8E6', '#ADD8E6');
+  fillForm(saved); setDirty(false);
+  check('#B88465', '#AD684F', '#ADD8E6', '#ADD8E6');
+  assert.equal(state.dirty, false);
+  assert.deepEqual(state.result, { revision: 'original', settings: saved });
+});
+
+test('the drawings tab follows draft finishes and geometry, discards late responses and restores the saved sheet on undo', async t => {
+  const saved = modern();
+  state.result = { revision: 'original', settings: saved, files: { drawings_svg: '/files/original/drawings.svg' } };
+  const previousWindow = globalThis.window;
+  globalThis.window = { location: new URL('http://localhost:8766') };
+  const panel = document.querySelector('#panel-drawings'), image = document.querySelector('#drawing-preview');
+  const status = document.querySelector('#drawing-status');
+  image.style = {};
+  let scheduled;
+  t.mock.method(globalThis, 'setTimeout', callback => { scheduled = callback; return 1; });
+  t.mock.method(globalThis, 'clearTimeout', () => { scheduled = null; });
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', (url, options) => new Promise(resolve => {
+    requests.push({ url, design: JSON.parse(options.body), signal: options.signal, resolve });
+  }));
+  t.after(() => { state.result = null; state.dirty = false; panel.hidden = true; globalThis.window = previousWindow; });
+  fillForm(saved);
+  panel.hidden = false;
+  setDirty();
+  const savedURL = image.src;
+  assert.equal(savedURL, 'http://localhost:8766/files/original/drawings.svg?revision=original');
+  panel.hidden = true;
+  document.querySelector('#exterior-hex').value = '#81551B';
+  setDirty();
+  assert.equal(scheduled, null);
+  panel.hidden = false;
+  setDirty();
+  const first = scheduled();
+  assert.equal(requests[0].url, '/api/drawings-preview');
+  assert.equal(requests[0].design.exterior_finish.hex, '#81551B');
+  assert.equal(image.style.visibility, 'hidden');
+  document.querySelector('#exterior-name').value = 'Ochre brick';
+  document.querySelector('#length').value = '12';
+  setDirty();
+  const latest = scheduled();
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(requests[1].design.exterior_finish.name, 'Ochre brick');
+  assert.equal(requests[1].design.length_mm, 12000);
+  const svg = () => new Response('<svg xmlns="http://www.w3.org/2000/svg"/>', { headers: { 'Content-Type': 'image/svg+xml' } });
+  requests[1].resolve(svg()); await latest;
+  const draftURL = image.src;
+  assert.match(draftURL, /^blob:/);
+  assert.match(status.textContent, /Draft drawings/);
+  assert.equal(image.style.visibility, '');
+  requests[0].resolve(svg()); await first;
+  assert.equal(image.src, draftURL);
+  document.querySelector('#length').value = '1';
+  setDirty();
+  const invalid = scheduled();
+  requests[2].resolve(Response.json({ error: 'Check the clear length.' }, { status: 422 }));
+  await invalid;
+  assert.match(status.textContent, /Draft drawings unavailable.*Check the clear length/);
+  assert.equal(image.style.visibility, 'hidden');
+  fillForm(saved); setDirty(false);
+  assert.equal(image.src, savedURL);
+  assert.match(status.textContent, /saved revision original/);
+  assert.equal(image.style.visibility, '');
+  document.querySelector('#override-floor').value = '500'; setDirty();
+  assert.equal(scheduled, null);
+  assert.equal(image.src, savedURL);
+  assert.equal(state.dirty, true);
+});
+
+test('a legacy shell mesh identifies external faces and corner returns, internal faces and reveals', () => {
+  const vertices = [
+    [3, -.2, 0], [4, -.2, 0], [3, -.2, 2],  // exterior
+    [3, 0, 0], [3, 0, 2], [4, 0, 0],        // interior
+    [-.2, -.2, 0], [-.2, 0, 0], [-.2, 0, 3], // external corner return
+    [3, -.2, 0], [3, 0, 0], [3, 0, 2],      // door reveal
+  ].flat();
+  const indices = Array.from({ length: 12 }, (_, i) => i);
+  assert.deepEqual(legacyWallFaceSlots({ id: 'W1', kind: 'wall' }, vertices, indices, fixture()), [0, 1, 0, 2]);
+  assert.equal(legacyWallFaceSlots({ id: 'P1', kind: 'wall' }, vertices, indices, fixture()), null);
 });
 
 test('sidebar rate edits retain partition geometry, room selections and minimum width', () => {
@@ -174,6 +320,38 @@ test('comparison view separates CSV changes from design edits and labels library
   assert.match(details, /CSV source A.*CSV source B/); assert.match(details, /Library rate effect.*400/);
   assert.match(document.querySelector('#compare-library-effect').textContent, /400/);
   assert.match(document.querySelector('#compare-override-effect').textContent, /0/);
+});
+
+test('spec previews both wall swatches and keeps the saved schedule accessible until update', t => {
+  const saved = { ...modern(), exterior_finish: { kind: 'facebrick', name: 'Terracotta', hex: '#AD684F' } };
+  state.result = { settings: structuredClone(saved), revision: 'original',
+    rooms: [{ name: 'Living', id: 'ROOM1', area_m2: 80, finishes: { paint: 'Light blue' } }] };
+  const panel = document.querySelector('#panel-spec');
+  panel.hidden = false;
+  t.after(() => { panel.hidden = true; state.result = null; state.dirty = false; });
+  const content = document.querySelector('#spec-content');
+  const sections = (parent = content) => parent.querySelectorAll('section').map(section => section.children[0].textContent);
+  const wallDescriptions = (parent = content) => parent.querySelectorAll('section').find(section => section.children[0].textContent.includes('Wall finishes')).children.slice(1);
+  const colours = (parent = content) => wallDescriptions(parent).map(p => p.children[0].style.backgroundColor);
+  const draft = { ...saved, inner_leaf_finish: 'bare_brick', inner_brick_hex: '#996622',
+    exterior_finish: { kind: 'rendered_paint', name: 'Ochre', hex: '#AA6633' },
+    rooms: [{ id: 'ROOM1', name: 'Living', finishes: { floor: 'Oak', paint: 'Chalk' } }] };
+  fillForm(draft); setDirty();
+  assert.match(document.querySelector('#spec-revision').textContent, /Draft finish preview/);
+  assert.deepEqual(sections(), ['Wall finishes']);
+  assert.deepEqual(colours(), ['#AA6633', '#996622']);
+  assert.match(wallDescriptions()[0].textContent, /Render and paint.*Ochre/);
+  assert.match(wallDescriptions()[1].textContent, /Bare common brick/);
+  const prior = content.querySelectorAll('details')[0];
+  assert.equal(prior.open, false);
+  assert.match(prior.children[0].textContent, /Saved specification.*revision original/);
+  assert.ok(sections(prior).includes('Room finishes schedule'));
+  assert.deepEqual(colours(prior), ['#AD684F', '#ADD8E6']);
+  fillForm(saved); setDirty(false);
+  assert.match(document.querySelector('#spec-revision').textContent, /Design revision original/);
+  assert.ok(sections().some(heading => heading.includes('Quantities & pricing')));
+  assert.equal(content.querySelectorAll('details').length, 0);
+  assert.deepEqual(colours(), ['#AD684F', '#ADD8E6']);
 });
 
 test('Rates panel override editor and reset share sidebar state and reflect load/undo', () => {

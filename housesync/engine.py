@@ -39,7 +39,7 @@ MEASUREMENT_RULE = (
     "Floor finish and ceiling use the compiled clear internal room area. Skirting uses its internal perimeter "
     "less compiled door opening widths. Internal plaster/render and external render use final wall faces at "
     "the room and shell boundaries respectively, deducting opening voids and excluding buried corner faces. "
-    "Painting includes their combined net vertical face area multiplied by the selected coat count. Measured "
+    "Only selected finishes are priced. Paint uses the selected net faces multiplied by the coat count. Measured "
     "net area remains visible separately from the coat-adjusted paint quantity. Reveals, sills, soffits and "
     "floor/roof paint are excluded. Each item's gross priced quantity is its net quantity times (1 + wastage % / 100), "
     "rounded to six decimals. Roof area is the flat roof's compiled top surface including its 300 mm overhang. "
@@ -58,7 +58,7 @@ ROOM_MEASUREMENT_RULE = (
     "STEP wall solids, excluding buried contacts and opening reveals. Room boundary segments assign those faces to rooms. "
     "Exposed upper bands above shorter intersecting walls are split at room vertices and gap midpoints and assigned "
     "to the nearest room in plan on the exposed side; stable room IDs break ties. This attribution preserves the exact "
-    "measured total and is recorded as junction_exposed_area_m2. Exterior render and paint use shell external faces. "
+    "measured total and is recorded as junction_exposed_area_m2. Exposed facebrick omits exterior render and paint. Bare inner brick omits shell plaster and paint; partitions retain their finishes. "
     "Reveals, sills, soffits and floor/roof/ceiling painting are excluded. Paint quantity is measured area times coats; "
     "each gross priced quantity applies item wastage and rounds half-up to six decimals. Amounts round half-up to cents. "
     "Doors and windows count parent products once. Rate library and override provenance remain tied to this saved revision. "
@@ -116,7 +116,10 @@ def _house(settings: HouseSettings, layout: dict | None = None) -> House:
     length, width, height, thickness = (
         settings.length_mm, settings.width_mm, settings.height_mm, settings.wall_thickness_mm
     )
-    colour = tuple(int(settings.paint_hex[index:index + 2], 16) / 255 for index in (1, 3, 5))
+    def swatch(value: str) -> Render:
+        return Render(color=tuple(int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)), rough=0.8)
+
+    outside = settings.exterior_finish
     with House(settings.project_name) as house:
         ground = Level("L0", elevation=0, height=height)
         Grid("setting_out", x={"A": 0, "B": length}, y={"1": 0, "2": width})
@@ -124,17 +127,24 @@ def _house(settings: HouseSettings, layout: dict | None = None) -> House:
             "wall_paint", product=f"Wall paint - {settings.paint_colour} ({settings.paint_hex})",
             finish=f"{settings.paint_colour} {settings.paint_hex}", supplier="To be selected",
             notes="Interior/exterior product suitability and coating system to be specified for the actual project.",
-            render=Render(color=colour, rough=0.8),
+            render=swatch(settings.paint_hex),
         )
-        Material("masonry", product="Illustrative uniform masonry wall", render=Render(color=(0.7, 0.7, 0.68)))
+        inner_brick = Material("inner_common_brick", product="Common brick inner leaf", finish=f"Bare brick {settings.inner_brick_hex}",
+                               render=swatch(settings.inner_brick_hex))
+        outer_brick = Material("outer_brick", product="Outer brick leaf",
+                               finish=f"{outside.name} {outside.hex}" if outside.kind == "facebrick" else None,
+                               render=swatch(outside.hex if outside.kind == "facebrick" else settings.inner_brick_hex))
+        outer_surface = outer_brick if outside.kind == "facebrick" else Material(
+            "exterior_paint", product="Paint on external render", finish=f"{outside.name} {outside.hex}", render=swatch(outside.hex))
+        inner_surface = paint if settings.inner_leaf_finish == "plaster_paint" else inner_brick
         floor = Material("floor_concrete", product="150 mm demonstration floor slab", render=Render(color=(0.72, 0.72, 0.70)))
         roof_material = Material("roof_concrete", product="200 mm flat demonstration roof", render=Render(color=(0.38, 0.43, 0.48)))
         frame = Material("steel_black", product="Opening frame allowance", render=Render(color=(0.13, 0.16, 0.19)))
         glass = Material("glass_double", product="Glazed window allowance", render=Render(color=(0.58, 0.82, 0.91), transmission=0.45))
         leaf = Material("door_leaf", product="Solid door allowance", render=Render(color=(0.48, 0.30, 0.17)))
         assembly = Assembly(
-            "external_wall", layers=[Layer(material="masonry", thickness=thickness)],
-            finish_in=paint, finish_out=paint,
+            "external_wall", layers=[Layer(material=leaf_id, thickness=thickness / 2) for leaf_id in (outer_brick.id, inner_brick.id)],
+            finish_in=inner_surface, finish_out=outer_surface,
         )
         # South/north walls own the four corner returns. East/west walls butt
         # against them, so wall volumes neither overlap nor leave corner gaps.
@@ -153,10 +163,10 @@ def _house(settings: HouseSettings, layout: dict | None = None) -> House:
                 assembly=assembly_id, level=ground, align="center", external=False, height=partition["height_mm"],
                 cut_against=partition["cut_against"], wall_type=partition["wall_type"],
             )
+        opening_starts = {item["opening_id"]: item["start_mm"] for item in layout["connections"]}
         for opening in settings.openings:
             partition = partition_geometry.get(opening.host)
-            span = partition["length_mm"] if partition else length if opening.host in {"W1", "W3"} else width
-            start = (span - opening.width_mm) / 2 if opening.offset_mm is None else opening.offset_mm
+            start = opening_starts[opening.id]
             # The north/south compiler paths own corner returns. Browser inputs
             # measure from the inner room corner, so translate by one thickness.
             position = start + (partition["start_extension_mm"] if partition else thickness if opening.host in {"W1", "W3"} else 0)
@@ -256,6 +266,20 @@ def _quantities(ir: IRDocument) -> dict[str, float | int]:
     }
 
 
+def _apply_wall_finishes(settings: HouseSettings, quantities: dict, rooms: list[dict]) -> None:
+    """Keep physical wall areas while applying the selected surface treatments to priced trades."""
+    quantities["shell_inner_face_area_m2"] = round(sum(room["shell_inner_face_area_m2"] for room in rooms), 6)
+    quantities["external_wall_face_area_m2"] = quantities["external_render_area_m2"]
+    if settings.inner_leaf_finish == "bare_brick":
+        for room in rooms:
+            area = round(max(0, room["internal_plaster_area_m2"] - room["shell_inner_face_area_m2"]), 6)
+            room["internal_plaster_area_m2"] = room["paint_area_m2"] = area
+        quantities["internal_plaster_area_m2"] = round(sum(room["paint_area_m2"] for room in rooms), 6)
+    if settings.exterior_finish.kind == "facebrick":
+        quantities["external_render_area_m2"] = 0.0
+    quantities["paint_area_m2"] = round(quantities["internal_plaster_area_m2"] + quantities["external_render_area_m2"], 6)
+
+
 def _base_boq(settings: HouseSettings, quantities: dict[str, Any], rate_library: RateLibrary | None = None) -> list[dict[str, Any]]:
     library = _pricing_library(settings, rate_library)
     def opening_description(kind: str) -> tuple[str, list[str]]:
@@ -274,12 +298,28 @@ def _base_boq(settings: HouseSettings, quantities: dict[str, Any], rate_library:
 
     door_description, door_ids = opening_description("door")
     window_description, window_ids = opening_description("window")
+    outside = settings.exterior_finish
+    wall_description = f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings"
+    if outside.kind == "facebrick" or settings.inner_leaf_finish == "bare_brick":
+        wall_description = (f"{settings.wall_thickness_mm:g} mm two-leaf brick walls, net of openings; "
+                            f"outside: {outside.label} - {outside.name} ({outside.hex}); inside: "
+                            + (f"bare common brick ({settings.inner_brick_hex}), ready for finishes" if settings.inner_leaf_finish == "bare_brick"
+                               else "common brick for plaster and paint"))
+    inside_paint = f"{settings.paint_colour} ({settings.paint_hex})"
+    outside_paint = f"{outside.name} ({outside.hex})"
+    if outside.kind == "facebrick":
+        paint_description = f"Interior wall paint - {inside_paint}"
+    elif settings.inner_leaf_finish == "bare_brick":
+        paint_description = f"Exterior wall paint - {outside_paint}"
+    elif inside_paint != outside_paint:
+        paint_description = f"Wall paint - interior: {inside_paint}; exterior: {outside_paint}"
+    else:
+        paint_description = f"Wall paint - {inside_paint}; internal and external net faces"
     definitions = [
         ("FLOOR", "150 mm floor slab within clear internal room footprint", "floor_area_m2", ["S0"]),
-        ("WALL", f"{settings.wall_thickness_mm:g} mm uniform masonry walls, net of openings", "wall_volume_m3", ["W1", "W2", "W3", "W4"]),
+        ("WALL", wall_description, "wall_volume_m3", ["W1", "W2", "W3", "W4"]),
         ("ROOF", "200 mm flat roof including 300 mm overhang", "roof_area_m2", ["R0"]),
-        ("PAINT", f"Wall paint - {settings.paint_colour} ({settings.paint_hex}); internal and external net faces; "
-         f"measured net area {quantities['paint_area_m2']:g} m2 x {settings.paint_coats} coats",
+        ("PAINT", f"{paint_description}; measured net area {quantities['paint_area_m2']:g} m2 x {settings.paint_coats} coats",
          "paint_area_m2", ["W1", "W2", "W3", "W4"]),
         ("DOOR", door_description, "door_count", door_ids),
         ("WINDOW", window_description, "window_count", window_ids),
@@ -323,27 +363,48 @@ def _boq(settings: HouseSettings, quantities: dict[str, Any], rate_library: Rate
     from .layout import derive_layout
 
     rooms = derive_layout(settings)["rooms"]
+    if "external_wall_face_area_m2" not in quantities:
+        quantities = dict(quantities)
+        inner = quantities["internal_plaster_area_m2"]
+        rooms[0].update(internal_plaster_area_m2=inner, shell_inner_face_area_m2=inner)
+        _apply_wall_finishes(settings, quantities, rooms)
     rows, _groups = build_room_boq(settings, quantities, rooms, [], _base_boq(settings, quantities, rate_library))
     return rows
 
 
 def _mesh(ir: IRDocument) -> dict[str, Any]:
     objects = []
+    shell = [wall for wall in ir.of_kind("wall") if wall.has("external")]
+    slab = ir.entity("S0").geometry.bbox
+    inner_planes = [(axis, bound[axis] / 1000) for bound in (slab.min, slab.max) for axis in (0, 1)]
+    outer_planes = [(axis, extremum(getattr(wall.geometry.bbox, end)[axis] for wall in shell) / 1000)
+                    for axis in (0, 1) for end, extremum in (("min", min), ("max", max))]
+
+    def material_colour(key: str | None) -> str:
+        rgb = ir.materials[key].render.get("color") if key in ir.materials else None
+        return "#" + "".join(f"{round(channel * 255):02X}" for channel in rgb) if rgb else "#A8ADB3"
+
     for entity in ir.entities:
         if (not entity.physical and entity.kind != "space") or entity.geometry is None:
             continue
         vertices, faces = read_obj(ir.path(entity.geometry.obj), scale_to=1.0)
-        colour = "#A8ADB3"
-        if entity.material and entity.material in ir.materials:
-            rgb = ir.materials[entity.material].render.get("color")
-            if rgb:
-                colour = "#" + "".join(f"{round(channel * 255):02X}" for channel in rgb)
+        colour = material_colour(entity.material)
         item = {"id": entity.id, "kind": entity.kind, "vertices": vertices, "faces": faces, "colour": colour,
                 "physical": entity.physical}
         if entity.kind == "space":
             item.update(room_id=entity.id, name=entity.params.get("name", entity.params.get("use", entity.id)),
                         transparent=True, colour="#A1C4D4")
-        elif entity.kind == "wall" and not entity.has("external"):
+        elif entity.kind == "wall" and entity.has("external"):
+            assembly = ir.assemblies[entity.params["assembly"]]
+            item["face_colours"] = [material_colour(assembly.finish_out), material_colour(assembly.finish_in),
+                                    material_colour(assembly.layers[-1].material)]
+            # Opening reveals and wall tops show masonry. Exterior end returns use the facebrick.
+            item["face_slots"] = [
+                next((slot for slot, planes in enumerate((outer_planes, inner_planes)) for axis, coordinate in planes
+                      if all(abs(vertices[i][axis] - coordinate) < 1e-5 for i in face)), 2)
+                for face in faces
+            ]
+        elif entity.kind == "wall":
             item.update(internal=True, partition_id=entity.id)
         objects.append(item)
     return {"units": "m", "up_axis": "Z", "objects": objects}
@@ -394,7 +455,7 @@ def build_house(settings: HouseSettings, output_dir: Path, rate_library: RateLib
         compiled = house.compile()
         ir = compiled.write(str(output_dir))
         files: dict[str, Any] = {"ir": "ir.json", "settings": "settings.json"}
-        files["ifc"] = str(Path(export_ifc(ir, str(output_dir / "house.ifc"))).relative_to(output_dir)).replace("\\", "/")
+        files["ifc"] = str(Path(export_ifc(ir, str(output_dir / "house.ifc"), wall_layers=True)).relative_to(output_dir)).replace("\\", "/")
         files["upstream_plans"] = [
             str(Path(path).relative_to(output_dir)).replace("\\", "/")
             for path in export_plan(ir, "L0", str(output_dir / "upstream_drawings"))
@@ -423,13 +484,15 @@ def build_house(settings: HouseSettings, output_dir: Path, rate_library: RateLib
             rooms = [{**layout["rooms"][0], "area_m2": quantities["floor_area_m2"],
                       "floor_finish_area_m2": quantities["floor_finish_area_m2"], "ceiling_area_m2": quantities["ceiling_area_m2"],
                       "skirting_length_m": quantities["skirting_length_m"], "internal_plaster_area_m2": quantities["internal_plaster_area_m2"],
-                      "paint_area_m2": quantities["internal_plaster_area_m2"], "junction_exposed_area_m2": 0,
+                      "paint_area_m2": quantities["internal_plaster_area_m2"], "shell_inner_face_area_m2": quantities["internal_plaster_area_m2"],
+                      "junction_exposed_area_m2": 0,
                       "door_ids": [opening.id for opening in ir.of_kind("door")],
                       "opening_ids": [opening.id for opening in ir.tagged("opening")],
                       "wall_element_ids": ["W1", "W2", "W3", "W4"]}]
             partitions = []
             quantities.update(shell_wall_volume_m3=quantities["wall_volume_m3"], partition_wall_volume_m3=0.0,
                               shell_wall_net_area_m2=quantities["wall_net_area_m2"], partition_wall_net_area_m2=0.0)
+        _apply_wall_finishes(settings, quantities, rooms)
         base_rows = _base_boq(settings, quantities, library)
         boq, groups = build_room_boq(settings, quantities, rooms, partitions, base_rows)
         wall_ids = {wall.id for wall in ir.of_kind("wall")}

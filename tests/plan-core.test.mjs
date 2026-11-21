@@ -13,6 +13,23 @@ const fixture = () => ({
   openings: defaultOpenings(),
 });
 
+test('old shared paint reopens without a variation and both brick leaf choices survive undo and redo', () => {
+  const old = fixture(), normalized = core.normalizeBoqSettings(old);
+  assert.deepEqual(normalized.exterior_finish, { kind: 'rendered_paint', name: 'Light blue', hex: '#ADD8E6' });
+  assert.deepEqual(describeChanges(old, normalized), []);
+  const draft = core.normalizeBoqSettings(normalized);
+  draft.exterior_finish = { kind: 'facebrick', name: 'Charcoal', hex: '#575656' };
+  const history = new DraftHistory(normalized); history.push(draft);
+  assert.equal(history.current.paint_hex, '#ADD8E6');
+  assert.deepEqual(describeChanges(normalized, draft).map(text => text.split(':')[0]),
+    ['External brick leaf treatment', 'External brick leaf finish', 'External brick leaf colour']);
+  const bare = { ...draft, inner_leaf_finish: 'bare_brick', inner_brick_hex: '#B57649' };
+  history.push(bare);
+  assert.equal(history.undo().inner_leaf_finish, 'plaster_paint');
+  assert.deepEqual(history.redo().exterior_finish, draft.exterior_finish);
+  assert.ok(describeChanges(draft, bare).some(line => line.includes('plaster and paint to bare brick')));
+});
+
 test('legacy settings receive independently cloned default openings without mutating input', () => {
   const original = fixture(); delete original.openings;
   const one = cloneSettings(original), two = cloneSettings(original);

@@ -394,7 +394,7 @@ def _opening_checks(data: dict, walls: dict, partitions: list[dict], rooms: dict
         if len(room_ids) != expected:
             errors.append(f"{identity} does not adjoin {expected} distinct clear room(s) across its full opening width")
         connections.append({"opening_id": identity, "kind": opening.get("kind", "door"),
-                            "host": host_id, "room_ids": room_ids, "exterior": exterior})
+                            "host": host_id, "start_mm": start, "room_ids": room_ids, "exterior": exterior})
     return connections
 
 

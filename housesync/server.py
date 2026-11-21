@@ -13,6 +13,7 @@ import threading
 import traceback
 import uuid
 import webbrowser
+from contextlib import suppress
 from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,14 +22,14 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from pydantic import ValidationError
 
 from .changes import compare_revisions, export_change_report
-from .documents import export_documents
-from .engine import build_house, revision_for
+from .documents import drawing_svg, export_documents
+from .engine import ROOF_OVERHANG_MM, ROOF_THICKNESS_MM, SLAB_THICKNESS_MM, build_house, revision_for
 from .layout import derive_layout
 from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_orders_zip
 from .quote_documents import export_quote_documents
 from .quotes import build_variation_quote
 from .rates import RateLibrary, RateLibraryError, load_rate_library
-from .schema import HouseSettings
+from .schema import ExteriorFinish, HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
@@ -79,6 +80,21 @@ def atomic_json(path: Path, data: dict) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def draft_drawing_svg(settings: HouseSettings) -> str:
+    """Draw the editable layout without issuing files or running a priced CAD build."""
+    layout = derive_layout(settings, validate=True)
+    starts = {item["opening_id"]: item["start_mm"] for item in layout["connections"]}
+    drawing = {
+        "length_mm": settings.length_mm, "width_mm": settings.width_mm,
+        "height_mm": settings.height_mm, "wall_thickness_mm": settings.wall_thickness_mm,
+        "slab_thickness_mm": SLAB_THICKNESS_MM, "roof_thickness_mm": ROOF_THICKNESS_MM,
+        "roof_overhang_mm": ROOF_OVERHANG_MM, "rooms": layout["rooms"], "partitions": layout["partitions"],
+        "openings": [{**opening.model_dump(exclude={"offset_mm"}), "start_mm": starts[opening.id]}
+                     for opening in settings.openings],
+    }
+    return drawing_svg({"revision": "DRAFT", "settings": settings.model_dump(mode="json"), "drawing": drawing})
 
 
 class Application:
@@ -236,7 +252,7 @@ class Application:
             saved = self._previous()
             if saved is None:
                 library = load_rate_library(self.rate_library_path)
-                return self.build(HouseSettings(currency=library.currency), rate_library=library)
+                return self.build(HouseSettings(currency=library.currency, exterior_finish=ExteriorFinish()), rate_library=library)
             # Reopening uses the issued pricing basis. Only an explicit build
             # adopts edited CSV prices. Pre-library snapshots have no such basis.
             if "rate_library" in saved:
@@ -405,7 +421,7 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                 self._reject_post("Origin is not allowed", 403)
                 return
             route = urlsplit(self.path).path
-            if route not in {"/api/build", "/api/layout", "/api/shutdown"}:
+            if route not in {"/api/build", "/api/layout", "/api/drawings-preview", "/api/shutdown"}:
                 self._json({"error": "Route not found"}, 404)
                 return
             if self.headers.get_content_type() != "application/json":
@@ -431,6 +447,12 @@ def handler_for(application: Application) -> type[BaseHTTPRequestHandler]:
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
                     return
                 settings = HouseSettings.model_validate_json(body)
+                if route == "/api/drawings-preview":
+                    svg = draft_drawing_svg(settings).encode("utf-8")
+                    # The browser can cancel a preview when a newer edit arrives.
+                    with suppress(ConnectionError):
+                        self._content(svg, "image/svg+xml; charset=utf-8")
+                    return
                 self._json(application.envelope(application.build(settings)))
             except ValidationError as exc:
                 messages = [".".join(map(str, item["loc"])) + ": " + item["msg"] for item in exc.errors()]

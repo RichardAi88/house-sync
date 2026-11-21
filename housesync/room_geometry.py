@@ -115,7 +115,7 @@ def measure_rooms(ir: IRDocument, layout: dict) -> tuple[list[dict], list[dict],
         room["area_m2"] = round(entity.derived_as(SpaceGeometry).area_mm2 / 1e6, 6)
         room["floor_finish_area_m2"] = room["ceiling_area_m2"] = room["area_m2"]
         room["internal_plaster_area_m2"] = room["paint_area_m2"] = 0.0
-        room["junction_exposed_area_m2"] = 0.0
+        room["shell_inner_face_area_m2"] = room["junction_exposed_area_m2"] = 0.0
         room["wall_element_ids"] = sorted({boundary["wall_id"] for boundary in declaration.get("boundaries", [])})
         room["door_ids"], room["opening_ids"] = [], []
         rooms.append(room)
@@ -142,6 +142,7 @@ def measure_rooms(ir: IRDocument, layout: dict) -> tuple[list[dict], list[dict],
              max(wall.geometry.bbox.max[0] for wall in shells), max(wall.geometry.bbox.max[1] for wall in shells))
     exterior_planes = _segments([[outer[0], outer[1]], [outer[2], outer[1]], [outer[2], outer[3]], [outer[0], outer[3]]], [])
     height = max(wall.derived_as(WallGeometry).height for wall in walls)
+    shell_inside = ir.entity("S0").geometry.bbox
     main_planes = _main_planes(ir)
     solid = G.union(G.read_step(ir.path(wall.geometry.step)) for wall in walls if wall.geometry)
     external_area = 0.0
@@ -159,10 +160,13 @@ def measure_rooms(ir: IRDocument, layout: dict) -> tuple[list[dict], list[dict],
         surface = surface.intersection(eligible)
         if surface.area <= 1e-6:
             continue
+        on_shell = any(math.isclose(coordinate, bound[axis], abs_tol=1e-5) for bound in (shell_inside.min, shell_inside.max))
         assigned = []
         for room in rooms:
             contact = surface.intersection(_strips(segments[room["id"]], axis, coordinate, height))
             room["internal_plaster_area_m2"] += contact.area / 1e6
+            if on_shell:
+                room["shell_inner_face_area_m2"] += contact.area / 1e6
             assigned.append(contact)
         remainder = surface.difference(unary_union(assigned))
         if remainder.area > 1e-5:
@@ -171,8 +175,11 @@ def measure_rooms(ir: IRDocument, layout: dict) -> tuple[list[dict], list[dict],
                 extra = allocation[room["id"]] / 1e6
                 room["internal_plaster_area_m2"] += extra
                 room["junction_exposed_area_m2"] += extra
+                if on_shell:
+                    room["shell_inner_face_area_m2"] += extra
     for room in rooms:
         room["internal_plaster_area_m2"] = round(room["internal_plaster_area_m2"], 6)
+        room["shell_inner_face_area_m2"] = round(room["shell_inner_face_area_m2"], 6)
         room["paint_area_m2"] = room["internal_plaster_area_m2"]
         room["junction_exposed_area_m2"] = round(room["junction_exposed_area_m2"], 6)
     partitions = [{**declaration, "volume_m3": round(ir.entity(declaration["id"]).geometry.volume_mm3 / 1e9, 6)}

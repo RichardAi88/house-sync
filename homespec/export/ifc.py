@@ -49,7 +49,7 @@ def _scalar_props(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def export_ifc(ir: IRDocument, path: str) -> str:
+def export_ifc(ir: IRDocument, path: str, *, wall_layers: bool = False) -> str:
     f = ifcopenshell.api.project.create_file(version="IFC4")
     project = ifcopenshell.api.root.create_entity(f, ifc_class="IfcProject", name=ir.project)
     ifcopenshell.api.unit.assign_unit(f, length={"is_metric": True, "raw": "MILLIMETERS"})
@@ -75,6 +75,7 @@ def export_ifc(ir: IRDocument, path: str) -> str:
             materials[key] = ifcopenshell.api.material.add_material(f, name=key)
         return materials[key]
 
+    layer_sets: dict[str, Any] = {}
     products: dict[str, Any] = {}
     for e in ir.entities:
         if e.ifc_class is None or (e.extrusion is None and e.geometry is None):
@@ -92,7 +93,18 @@ def export_ifc(ir: IRDocument, path: str) -> str:
                 ifcopenshell.api.aggregate.assign_object(f, products=[prod], relating_object=storeys[e.level])
         elif e.level in storeys:
             ifcopenshell.api.spatial.assign_container(f, products=[prod], relating_structure=storeys[e.level])
-        if e.material:
+        if wall_layers and e.ifc_class == "IfcWall" and e.has("external") and e.params.get("assembly") in ir.assemblies:
+            key = e.params["assembly"]
+            assembly = ir.assemblies[key]
+            if key not in layer_sets:
+                layers = [f.create_entity("IfcMaterialLayer", Material=material(layer.material), LayerThickness=float(layer.thickness))
+                          for layer in assembly.layers]
+                layer_sets[key] = f.create_entity("IfcMaterialLayerSet", MaterialLayers=layers, LayerSetName=key)
+            ifcopenshell.api.material.assign_material(f, products=[prod], type="IfcMaterialLayerSetUsage", material=layer_sets[key])
+            _pset(f, prod, "HouseSpec_WallFinishes", {
+                side: ir.materials[finish].finish or finish for side, finish in
+                (("Exterior", assembly.finish_out), ("Interior", assembly.finish_in)) if finish in ir.materials})
+        elif e.material:
             ifcopenshell.api.material.assign_material(f, products=[prod], type="IfcMaterial", material=material(e.material))
         if e.ifc_class == "IfcWall":
             _pset(f, prod, "Pset_WallCommon", {"IsExternal": e.has("external"), "LoadBearing": e.has("external")})

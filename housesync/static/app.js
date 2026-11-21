@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { PlanEditor } from './plan-editor.js';
-import { normalizeBoqSettings, RATE_ITEMS, WASTAGE_DEFAULTS } from './plan-core.js';
+import { HOSTS, normalizeBoqSettings, wallFinishColours, RATE_ITEMS, WASTAGE_DEFAULTS } from './plan-core.js';
 
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
 const state = { result: null, dirty: false, busy: false, selected: null, settingsURL: null };
+const drawingPreview = { key: null, timer: null, controller: null, objectURL: null };
 let planEditor = null;
 const legacyOpenings = () => [
   { id: 'D1', kind: 'door', host: 'W1', offset_mm: null, width_mm: 1000, height_mm: 2100, sill_mm: 0 },
@@ -32,13 +33,17 @@ const comparison = { revisions: [], result: null, busy: false, request: 0, refre
 const rateLibraryState = { current: null, error: '', request: 0, busy: false };
 const overrideFields = Object.fromEntries(RATE_ITEMS.map(([code]) => [code, '#override-' + code.toLowerCase().replaceAll('_', '-')]));
 const wastageFields = Object.fromEntries(Object.keys(WASTAGE_DEFAULTS).map(key => [key, '#wastage-' + key.replaceAll('_', '-')]));
-const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', '#builder-name', '#quote-markup', '#quote-admin', '#quote-credit-treatment', '#quote-validity', '#client-description', ...Object.values(overrideFields), ...Object.values(wastageFields)];
-const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
+const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#exterior-kind', '#exterior-name', '#exterior-hex', '#inner-leaf-finish', '#inner-brick-hex', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', '#builder-name', '#quote-markup', '#quote-admin', '#quote-credit-treatment', '#quote-validity', '#client-description', ...Object.values(overrideFields), ...Object.values(wastageFields)];
+const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, selectedFace: null, finishKey: null, size: 12, target: new THREE.Vector3() };
 const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
 function settingsFromForm() {
-  return { project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), ...interiorSettings(draftInterior), builder_pricing: { overhead_margin_percent: Number($('#quote-markup').value), admin_fee_aud: Number($('#quote-admin').value), gst_percent: 10, credit_treatment: $('#quote-credit-treatment').value, validity_days: Number($('#quote-validity').value), builder_name: $('#builder-name').value.trim(), client_description: $('#client-description').value.trim().replaceAll('\r\n', '\n') }, allowances: draftAllowances.map(item => ({ ...item, description: item.description.trim().replaceAll('\r\n', '\n'), note: item.note.trim().replaceAll('\r\n', '\n') })) };
+  const wallFinishes = {
+    exterior_finish: { kind: $('#exterior-kind').value, name: $('#exterior-name').value.trim(), hex: $('#exterior-hex').value.toUpperCase() },
+    inner_leaf_finish: $('#inner-leaf-finish').value, inner_brick_hex: $('#inner-brick-hex').value.toUpperCase(),
+  };
+  return { ...wallFinishes, project_name: $('#project-name').value.trim(), length_mm: Math.round(Number($('#length').value) * 1000), width_mm: Math.round(Number($('#width').value) * 1000), height_mm: Math.round(Number($('#height').value) * 1000), wall_thickness_mm: Math.round(Number($('#thickness').value) * 1000), paint_colour: $('#paint-colour').value.trim(), paint_hex: $('#paint-hex').value.toUpperCase(), paint_coats: Number($('#paint-coats').value), currency: $('#currency').value, rate_overrides: Object.fromEntries(Object.entries(overrideFields).filter(([, id]) => $(id).value.trim() !== '').map(([code, id]) => [code, Number($(id).value)])), wastage: Object.fromEntries(Object.entries(wastageFields).map(([key, id]) => [key, Number($(id).value)])), rate_source: $('#rate-source').value.trim(), rate_date: $('#rate-date').value, openings: structuredClone(draftOpenings), ...interiorSettings(draftInterior), builder_pricing: { overhead_margin_percent: Number($('#quote-markup').value), admin_fee_aud: Number($('#quote-admin').value), gst_percent: 10, credit_treatment: $('#quote-credit-treatment').value, validity_days: Number($('#quote-validity').value), builder_name: $('#builder-name').value.trim(), client_description: $('#client-description').value.trim().replaceAll('\r\n', '\n') }, allowances: draftAllowances.map(item => ({ ...item, description: item.description.trim().replaceAll('\r\n', '\n'), note: item.note.trim().replaceAll('\r\n', '\n') })) };
 }
 
 function fillForm(settings) {
@@ -49,7 +54,9 @@ function fillForm(settings) {
   if (settings.currency && ![...$('#currency').options].some(option => option.value === settings.currency)) {
     const option = document.createElement('option'); option.value = settings.currency; option.textContent = settings.currency; $('#currency').append(option);
   }
-  const map = { '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date, '#builder-name': settings.builder_pricing.builder_name, '#quote-markup': settings.builder_pricing.overhead_margin_percent, '#quote-admin': settings.builder_pricing.admin_fee_aud, '#quote-credit-treatment': settings.builder_pricing.credit_treatment, '#quote-validity': settings.builder_pricing.validity_days, '#client-description': settings.builder_pricing.client_description };
+  const map = { '#exterior-kind': settings.exterior_finish.kind, '#exterior-name': settings.exterior_finish.name,
+    '#exterior-hex': settings.exterior_finish.hex, '#inner-leaf-finish': settings.inner_leaf_finish,
+    '#inner-brick-hex': settings.inner_brick_hex, '#project-name': settings.project_name, '#length': settings.length_mm / 1000, '#width': settings.width_mm / 1000, '#height': settings.height_mm / 1000, '#thickness': settings.wall_thickness_mm / 1000, '#paint-colour': settings.paint_colour, '#paint-hex': settings.paint_hex, '#paint-coats': settings.paint_coats, '#currency': settings.currency, '#rate-source': settings.rate_source, '#rate-date': settings.rate_date, '#builder-name': settings.builder_pricing.builder_name, '#quote-markup': settings.builder_pricing.overhead_margin_percent, '#quote-admin': settings.builder_pricing.admin_fee_aud, '#quote-credit-treatment': settings.builder_pricing.credit_treatment, '#quote-validity': settings.builder_pricing.validity_days, '#client-description': settings.builder_pricing.client_description };
   for (const [id, value] of Object.entries(map)) if (value !== undefined && value !== null) $(id).value = value;
   for (const [code, id] of Object.entries(overrideFields)) $(id).value = Object.hasOwn(settings.rate_overrides, code) ? settings.rate_overrides[code] : '';
   for (const [key, id] of Object.entries(wastageFields)) $(id).value = settings.wastage[key];
@@ -96,9 +103,33 @@ function removeAllowance(id) {
   draftAllowances = draftAllowances.filter(item => item.id !== id); renderAllowances(); setDirty();
 }
 
+for (const entry of document.querySelectorAll('#brick-catalogue-products tr')) {
+  const option = document.createElement('option');
+  option.value = entry.querySelector('a').textContent.trim();
+  option.label = `${entry.cells[0].textContent} · ${entry.cells[2].textContent}`;
+  $('#brick-product-names').append(option);
+}
+
+function swatchInputs(button) {
+  return button.closest('[data-side]').dataset.side === 'outside'
+    ? [$('#exterior-hex'), $('#exterior-name')] : [$('#paint-hex'), $('#paint-colour')];
+}
+
 function updateSwatches() {
+  const facebrick = $('#exterior-kind').value === 'facebrick';
+  $('#brick-catalogue-note').hidden = !facebrick;
+  if (facebrick) $('#exterior-name').setAttribute('list', 'brick-product-names');
+  else $('#exterior-name').removeAttribute('list');
+  const bare = $('#inner-leaf-finish').value === 'bare_brick';
+  const hasInternalPaint = !bare || draftInterior.partitions.length > 0;
+  const hasPaint = hasInternalPaint || $('#exterior-kind').value === 'rendered_paint';
+  $('#bare-brick-controls').hidden = !bare;
+  $('#interior-paint-controls').hidden = !hasInternalPaint;
+  $('#paint-colour').required = hasInternalPaint;
+  $('#paint-coats-field').hidden = $('#paint-coats-note').hidden = !hasPaint;
   document.querySelectorAll('.paint-swatch').forEach(button => {
-    const selected = button.dataset.colour.toLowerCase() === $('#paint-hex').value.toLowerCase();
+    const [input] = swatchInputs(button);
+    const selected = button.dataset.colour.toLowerCase() === input.value.toLowerCase();
     button.classList.toggle('active', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
@@ -107,10 +138,13 @@ function updateSwatches() {
 function setDirty(syncPlan = true) {
   const settings = settingsFromForm();
   if (syncPlan) planEditor?.setDraft(settings);
+  previewWallFinishes(settings);
+  syncDrawingPreview(settings);
   state.dirty = !state.result || libraryDiffersFromRevision() || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
-  $('#sync-status').textContent = state.dirty ? 'Draft plan · update to coordinate outputs' : 'Model & documents in sync';
+  if (state.result && $('#panel-spec').hidden === false) renderSpec(state.result, state.dirty ? settings : null);
+  $('#sync-status').textContent = state.dirty ? 'Draft changes · update to save' : 'Model & documents in sync';
   $('#sync-status').classList.toggle('pending', state.dirty);
-  $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
+  $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the house and documents to save this revision.' : 'Saved locally. All outputs share this revision.';
   setDownloadLinks();
   $('#comparison-draft-note').hidden = !state.dirty; setComparisonDownloads();
 }
@@ -148,6 +182,69 @@ function downloadURL(value) {
     const url = new URL(value, window.location.origin);
     return url.origin === window.location.origin ? url.href : null;
   } catch { return null; }
+}
+
+function drawingSettings(settings) {
+  const fields = ['project_name', 'length_mm', 'width_mm', 'height_mm', 'wall_thickness_mm',
+    'exterior_finish', 'inner_leaf_finish', 'inner_brick_hex', 'paint_hex', 'paint_colour',
+    'openings', 'partitions', 'rooms', 'min_room_width_mm'];
+  return Object.fromEntries(fields.map(field => [field, settings[field]]));
+}
+
+function syncDrawingPreview(settings) {
+  const result = state.result;
+  if ($('#panel-drawings').hidden) return;
+  const file = downloadURL(result?.files?.drawings_svg);
+  if (!file) return;
+  const image = $('#drawing-preview');
+  const status = $('#drawing-status');
+  const draft = drawingSettings(settings);
+  const draftKey = stableSettings(draft);
+  const saved = draftKey === stableSettings(drawingSettings(comparableSettings(result.settings)));
+  const key = saved ? result.revision : draftKey;
+  if (drawingPreview.key === key) return;
+  clearTimeout(drawingPreview.timer);
+  drawingPreview.controller?.abort();
+  drawingPreview.key = key;
+  if (drawingPreview.objectURL) {
+    URL.revokeObjectURL(drawingPreview.objectURL);
+    drawingPreview.objectURL = null;
+  }
+  if (saved) {
+    const url = new URL(file);
+    url.searchParams.set('revision', result.revision);
+    image.src = url.href;
+    image.hidden = false;
+    image.style.visibility = '';
+    status.textContent = `Drawings from saved revision ${result.revision}.`;
+    return;
+  }
+  // Keep the sheet's height while loading so a reader on the rear elevations stays in place.
+  image.style.visibility = 'hidden';
+  status.textContent = 'Updating draft drawings…';
+  const controller = new AbortController();
+  drawingPreview.controller = controller;
+  drawingPreview.timer = setTimeout(async () => {
+    try {
+      const response = await fetch('/api/drawings-preview', { method: 'POST', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Request failed (${response.status}).`);
+      }
+      const svg = await response.blob();
+      if (controller.signal.aborted) return;
+      drawingPreview.objectURL = URL.createObjectURL(svg);
+      image.src = drawingPreview.objectURL;
+      image.hidden = false;
+      image.style.visibility = '';
+      status.textContent = 'Draft drawings. Update house & documents to save and download this set.';
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      drawingPreview.key = null;
+      status.textContent = `Draft drawings unavailable. ${error.message}`;
+    }
+  }, 120);
 }
 
 function setDownloadLinks() {
@@ -191,8 +288,7 @@ function resultReceived(result, populate = false) {
   renderSpec(result);
   renderRates();
   updateOverrideHints();
-  const drawing = downloadURL(result.files?.drawings_svg);
-  if (drawing) $('#drawing-preview').src = `${drawing}${drawing.includes('?') ? '&' : '?'}revision=${encodeURIComponent(result.revision)}`;
+  syncDrawingPreview(comparableSettings(result.settings));
   renderModel(result.mesh);
   setDownloadLinks();
   $('#comparison-draft-note').hidden = true;
@@ -395,12 +491,15 @@ function renderBOQ(result) {
   $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', 'Rate basis identifies each saved item as library or design override, with its recorded source and effective date. The subtotal covers only modelled scope.'].join(' ');
 }
 
-function renderSpec(result) {
-  const settings = result.settings;
+function renderSpec(result, draft = null) {
+  const settings = normalizeBoqSettings(result.settings);
   const drawing = result.drawing || {};
-  $('#spec-title').textContent = settings.project_name;
-  $('#spec-revision').textContent = `Design revision ${result.revision} · dimensions in millimetres`;
-  const container = $('#spec-content');
+  $('#spec-title').textContent = draft?.project_name ?? settings.project_name;
+  $('#spec-revision').textContent = draft
+    ? 'Draft finish preview · Choose Update house & documents for the measured schedules and downloads.'
+    : `Design revision ${result.revision} · dimensions in millimetres`;
+  let container = $('#spec-content');
+  const savedOpen = draft && container.lastElementChild?.tagName === 'DETAILS' && container.lastElementChild.open;
   container.replaceChildren();
   const section = (title, paragraphs) => {
     const part = document.createElement('section'); part.className = 'spec-section';
@@ -409,9 +508,31 @@ function renderSpec(result) {
     container.append(part);
     return part;
   };
+  const wallFinishes = (title, selection) => {
+    const outside = selection.exterior_finish;
+    const bare = selection.inner_leaf_finish === 'bare_brick';
+    const colours = wallFinishColours(selection);
+    const finish = section(title, [
+      `External brick leaf · ${outside.kind === 'facebrick' ? 'Exposed facebrick' : 'Render and paint'} · ${outside.name} (${colours.outside}).`,
+      bare ? `Internal brick leaf · Bare common brick (${colours.inside}), ready for finishes.` : `Internal brick leaf · Plaster and paint · ${selection.paint_colour} (${colours.inside}).`,
+    ]);
+    finish.querySelectorAll('p').forEach((p, i) => {
+      const swatch = document.createElement('span'); swatch.className = 'spec-colour';
+      swatch.style.backgroundColor = i === 0 ? colours.outside : colours.inside; p.prepend(swatch);
+    });
+    return finish;
+  };
+  if (draft) {
+    wallFinishes('Wall finishes', draft);
+    const saved = document.createElement('details');
+    saved.open = Boolean(savedOpen);
+    const label = document.createElement('summary');
+    label.textContent = `Saved specification · revision ${result.revision}`;
+    saved.append(label); container.append(saved); container = saved;
+  }
   section('01 · Scope & setting out', [`Single-storey rectangular house with clear internal dimensions of ${number(settings.length_mm, 0)} × ${number(settings.width_mm, 0)} mm. Wall height ${number(settings.height_mm, 0)} mm; wall thickness ${number(settings.wall_thickness_mm, 0)} mm.`, 'Refer to the coordinated floor plan and elevations for element locations and overall dimensions.']);
-  const finish = section('02 · Wall finish', [`Selected paint: ${settings.paint_colour}. Colour reference ${settings.paint_hex}. This is the exterior and default interior finish. Room paint overrides are listed in the room finishes schedule.`, 'Confirm the manufacturer, product, substrate preparation, primer and coating system before construction.']);
-  const colour = document.createElement('span'); colour.className = 'spec-colour'; colour.style.backgroundColor = settings.paint_hex; finish.querySelector('p').prepend(colour);
+  const finish = wallFinishes('02 · Wall finishes', settings);
+  const bare = settings.inner_leaf_finish === 'bare_brick';
   const paint = result.partitions?.length ? null : result.boq?.find(row => row.code === 'PAINT');
   if (paint?.net_quantity !== undefined) { const paragraph = document.createElement('p'); paragraph.textContent = `${number(paint.measured_quantity, 3)} m2 measured net wall area x ${settings.paint_coats} coats = ${number(paint.net_quantity, 3)} m2 before ${number(paint.wastage_percent)}% wastage; priced gross quantity ${number(paint.gross_quantity, 3)} m2.`; finish.append(paragraph); }
   const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high; start ${number(opening.start_mm, 0)} mm from the host inner reference${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
@@ -420,7 +541,8 @@ function renderSpec(result) {
   if (result.rooms?.length) {
     section('Room finishes schedule', result.rooms.map(room =>
       `${room.name} (${room.id}) · ${number(room.area_m2)} m². ` +
-      Object.entries(room.finishes).map(([trade, value]) => `${trade}: ${value}`).join(' · ')));
+      Object.entries(room.finishes).filter(([trade]) => trade !== 'paint' || !bare || room.paint_area_m2 > 0)
+        .map(([trade, value]) => `${trade === 'paint' && bare ? 'partition paint' : trade}: ${value}`).join(' · ')));
   }
   for (const row of result.boq || []) if (trades.has(row.rate_code || row.code)) {
     const trade = (row.rate_code || row.code).replaceAll('_', ' ').toLowerCase();
@@ -753,8 +875,9 @@ function initializeViewer() {
       const hit = ray.intersectObjects(viewer.parts.filter(part => part.visible), false)[0];
       if (viewer.selected) viewer.selected.material.emissive.set(0x000000);
       viewer.selected = hit?.object || null;
-      if (viewer.selected) { viewer.selected.material.emissive.set(0x143d36); $('#selected-element').textContent = `${viewer.selected.userData.id} · ${viewer.selected.userData.name || viewer.selected.userData.kind}`; }
-      else $('#selected-element').textContent = 'Select an element to inspect';
+      viewer.selectedFace = hit?.faceIndex;
+      if (viewer.selected) viewer.selected.material.emissive.set(0x143d36);
+      describeSelectedElement(settingsFromForm());
     });
     resetCamera();
   } catch (error) {
@@ -772,6 +895,64 @@ function resetCamera() {
   viewer.controls?.update();
 }
 
+function describeSelectedElement(settings) {
+  const part = viewer.selected;
+  if (!part) { $('#selected-element').textContent = 'Select an element to inspect'; return; }
+  const { id, name, kind, faceSlots, partition } = part.userData;
+  let label = name || kind;
+  if (faceSlots) {
+    const slot = faceSlots[viewer.selectedFace], outside = settings.exterior_finish;
+    if (slot === 0) label = `External · ${outside?.kind === 'facebrick' ? 'Exposed facebrick' : 'Render and paint'} · ${outside?.name ?? settings.paint_colour}`;
+    if (slot === 1) label = settings.inner_leaf_finish === 'bare_brick' ? 'Internal · Bare common brick' : `Internal · Plaster and paint · ${settings.paint_colour}`;
+    if (slot === 2) label = 'Exposed brick core';
+  } else if (partition) label = `Partition · ${settings.paint_colour}`;
+  $('#selected-element').textContent = `${id} · ${label}`;
+}
+
+// Older saved meshes predate face slots. Use the saved geometry's boundary planes in metres.
+function legacyWallFaceSlots(item, vertices, indices, drawing) {
+  if (item.kind !== 'wall' || !HOSTS.includes(item.id) || !drawing) return null;
+  const { length_mm, width_mm, wall_thickness_mm } = drawing;
+  if (![length_mm, width_mm, wall_thickness_mm].every(Number.isFinite)) return null;
+  const t = wall_thickness_mm / 1000, length = length_mm / 1000, width = width_mm / 1000;
+  const outer = [[0, -t], [0, length + t], [1, -t], [1, width + t]];
+  const inner = [[0, 0], [0, length], [1, 0], [1, width]];
+  const slots = [];
+  for (let start = 0; start < indices.length; start += 3) {
+    const triangle = indices.slice(start, start + 3);
+    const onPlane = ([axis, coordinate]) => triangle.every(index => Math.abs(vertices[3 * index + axis] - coordinate) < 1e-5);
+    slots.push(outer.some(onPlane) ? 0 : inner.some(onPlane) ? 1 : 2);
+  }
+  return slots;
+}
+
+function colourWallFaces(attribute, slots, hexColours) {
+  const palette = hexColours.map(hex => new THREE.Color(hex));
+  slots.forEach((slot, face) => {
+    for (let vertex = 0; vertex < 3; vertex++) palette[slot].toArray(attribute.array, (face * 3 + vertex) * 3);
+  });
+  attribute.needsUpdate = true;
+}
+
+function previewWallFinishes(settings) {
+  if (!viewer.parts.length || !state.result) return;
+  if (viewer.selected) describeSelectedElement(settings);
+  const draft = wallFinishColours(settings);
+  const key = JSON.stringify(draft);
+  if (viewer.finishKey === key) return;
+  const saved = wallFinishColours(state.result.settings);
+  for (const part of viewer.parts) {
+    const { faceSlots, savedColours, partition } = part.userData;
+    if (faceSlots) {
+      const palette = ['outside', 'inside', 'brick'].map((side, i) => draft[side] === saved[side] ? savedColours[i] : draft[side]);
+      colourWallFaces(part.geometry.getAttribute('color'), faceSlots, palette);
+    } else if (partition) {
+      part.material.color.set(draft.paint === saved.paint ? part.userData.savedColour : draft.paint);
+    }
+  }
+  viewer.finishKey = key;
+}
+
 function renderModel(mesh) {
   if (!viewer.renderer) return;
   const keepView = Boolean(viewer.group);
@@ -781,7 +962,8 @@ function renderModel(mesh) {
     viewer.scene.remove(viewer.group);
     viewer.group.traverse(object => { object.geometry?.dispose(); if (Array.isArray(object.material)) object.material.forEach(material => material.dispose()); else object.material?.dispose(); });
   }
-  viewer.group = new THREE.Group(); viewer.parts = []; viewer.selected = null;
+  viewer.group = new THREE.Group(); viewer.parts = []; viewer.selected = null; viewer.selectedFace = null;
+  viewer.finishKey = JSON.stringify(wallFinishColours(state.result.settings));
   for (const item of mesh?.objects || []) {
     if (!item.vertices?.length || !item.faces?.length) continue;
     const vertices = Array.isArray(item.vertices[0]) ? item.vertices.flat() : item.vertices;
@@ -798,10 +980,24 @@ function renderModel(mesh) {
       }
       faces = floorFaces;
     }
-    const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(faces); geometry.computeVertexNormals();
+    let geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(faces);
+    const faceSlots = item.face_slots ?? legacyWallFaceSlots(item, vertices, faces, state.result.drawing ?? state.result.settings);
+    let savedColours;
+    if (faceSlots) {
+      const indexed = geometry;
+      geometry = indexed.toNonIndexed(); indexed.dispose();
+      savedColours = item.face_colours ?? Array(3).fill(item.colour);
+      const attribute = new THREE.BufferAttribute(new Float32Array(faces.length * 3), 3);
+      colourWallFaces(attribute, faceSlots, savedColours);
+      geometry.setAttribute('color', attribute);
+    }
+    geometry.computeVertexNormals();
     const isGlass = /glaz|glass/i.test(`${item.kind} ${item.id}`);
-    const material = new THREE.MeshStandardMaterial({ color: item.colour || '#d5ded6', roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass || isRoom, opacity: isRoom ? .38 : isGlass ? .48 : 1 });
+    const material = new THREE.MeshStandardMaterial({ color: faceSlots ? '#FFFFFF' : (item.colour || '#d5ded6'), vertexColors: Boolean(faceSlots), roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass || isRoom, opacity: isRoom ? .38 : isGlass ? .48 : 1 });
     const part = new THREE.Mesh(geometry, material); part.userData = { id: item.id, kind: item.kind, name: isRoom ? (state.result?.rooms?.find(room => room.id === item.id)?.name || item.name) : null };
+    if (faceSlots) Object.assign(part.userData, { faceSlots, savedColours });
+    else if (item.kind === 'wall' && (item.internal || item.partition_id)) Object.assign(part.userData, { partition: true, savedColour: item.colour });
     if (isRoom) part.position.z = .003;
     part.castShadow = !isGlass && !isRoom; part.receiveShadow = true;
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 35), new THREE.LineBasicMaterial({ color: 0x485e55, transparent: true, opacity: .18 })); part.add(edges);
@@ -837,11 +1033,16 @@ fields.forEach(id => $(id).addEventListener('input', () => { updateSwatches(); s
 Object.values(overrideFields).forEach(id => $(id).addEventListener('input', updateOverrideHints));
 document.querySelectorAll('[data-reset-override]').forEach(button => button.addEventListener('click', () => resetRateOverride(button.dataset.resetOverride)));
 $('#refresh-rate-library').addEventListener('click', refreshRateLibrary);
-document.querySelectorAll('.paint-swatch').forEach(button => button.addEventListener('click', () => { $('#paint-hex').value = button.dataset.colour; $('#paint-colour').value = button.dataset.name; updateSwatches(); setDirty(); }));
+document.querySelectorAll('.paint-swatch').forEach(button => button.addEventListener('click', () => {
+  const [colour, name] = swatchInputs(button); colour.value = button.dataset.colour; name.value = button.dataset.name;
+  updateSwatches(); setDirty();
+}));
 function showView(name) {
   document.querySelectorAll('.view-tab').forEach(tab => { const active = tab.dataset.panel === name; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
   document.querySelectorAll('.view-panel').forEach(panel => { panel.hidden = panel.id !== 'panel-' + name; });
   if (name === 'plan') planEditor?.focus();
+  if (name === 'spec' && state.result) renderSpec(state.result, state.dirty ? settingsFromForm() : null);
+  if (name === 'drawings') syncDrawingPreview(settingsFromForm());
 }
 document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => showView(button.dataset.panel)));
 
@@ -862,6 +1063,10 @@ $('#load-settings').addEventListener('change', async event => {
     if (file.size > 4194304) throw new Error('Please choose a House Sync design JSON no larger than 4 MiB.');
     const parsed = JSON.parse(await file.text()); const settings = parsed.settings || parsed;
     if (!settings.project_name || !Number.isFinite(settings.length_mm) || !Number.isFinite(settings.width_mm) || !Number.isFinite(settings.height_mm) || !Number.isFinite(settings.wall_thickness_mm) || !/^#[0-9a-f]{6}$/i.test(settings.paint_hex)) throw new Error('This file is missing valid house dimensions or a paint colour.');
+    const finishes = normalizeBoqSettings(settings), outside = finishes.exterior_finish;
+    if (!['facebrick', 'rendered_paint'].includes(outside?.kind) || typeof outside.name !== 'string' || !outside.name.trim() ||
+        outside.name.length > 80 || !/^#[0-9a-f]{6}$/i.test(outside.hex) || !/^#[0-9a-f]{6}$/i.test(finishes.inner_brick_hex) ||
+        !['bare_brick', 'plaster_paint'].includes(finishes.inner_leaf_finish)) throw new Error('Choose a valid treatment and colour for each brick leaf.');
     if (settings.allowances !== undefined && !Array.isArray(settings.allowances)) throw new Error('Allowances must be a list of PC/PS items.');
     if (settings.openings !== undefined && !Array.isArray(settings.openings)) throw new Error('Opening data must be an array of doors/windows.');
     fillForm(settings); setDirty(); errorMessage(''); $('#form-status').textContent = 'Design loaded. Review the plan and update to generate its model and documents.';

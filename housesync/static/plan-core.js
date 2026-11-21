@@ -20,10 +20,25 @@ export const RATE_DATE_DEFAULT = '2026-11-17';
 
 export const BUILDER_PRICING_DEFAULTS = Object.freeze({ overhead_margin_percent: 20, admin_fee_aud: 0, gst_percent: 10, credit_treatment: 'at_cost', validity_days: 14, builder_name: '', client_description: '' });
 
+/** Both views use the same swatches. Older designs used the interior paint on both sides. */
+export function wallFinishColours(settings) {
+  const hex = (value, fallback) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toUpperCase() : fallback;
+  const paint = hex(settings.paint_hex, '#ADD8E6');
+  const brick = hex(settings.inner_brick_hex, '#B88465');
+  return {
+    outside: hex(settings.exterior_finish?.hex, paint),
+    inside: settings.inner_leaf_finish === 'bare_brick' ? brick : paint,
+    brick, paint,
+  };
+}
+
 /** Fill absent pricing fields without replacing historical currency or entered rates. */
 export function normalizeBoqSettings(settings) {
   const result = {
     ...settings, currency: settings.currency ?? 'AUD', paint_coats: settings.paint_coats ?? 2,
+    exterior_finish: settings.exterior_finish ? { ...settings.exterior_finish }
+      : { kind: 'rendered_paint', name: settings.paint_colour ?? 'Light blue', hex: settings.paint_hex ?? '#ADD8E6' },
+    inner_leaf_finish: settings.inner_leaf_finish ?? 'plaster_paint', inner_brick_hex: settings.inner_brick_hex ?? '#B88465',
     rate_overrides: settings.rate_overrides === undefined
       ? Object.fromEntries(RATE_ITEMS.filter(([, , , key]) => Object.hasOwn(settings.rates ?? {}, key)).map(([code, , , key]) => [code, settings.rates[key]]))
       : { ...settings.rate_overrides },
@@ -291,8 +306,14 @@ export function describeChanges(before, after) {
   for (const [key, name] of [['length_mm', 'Internal length'], ['width_mm', 'Internal width'], ['height_mm', 'Wall height'], ['wall_thickness_mm', 'Wall thickness']]) {
     if (!same(a[key], b[key])) descriptions.push(name + ': ' + format(a[key]) + ' to ' + format(b[key]) + ' mm.');
   }
-  for (const [key, name] of [['project_name', 'Project name'], ['paint_colour', 'Paint finish'], ['paint_hex', 'Paint colour reference'], ['currency', 'Currency']]) {
+  for (const [key, name] of [['project_name', 'Project name'], ['paint_colour', 'Inside · Paint finish'], ['paint_hex', 'Internal paint colour'], ['inner_brick_hex', 'Bare internal brick colour'], ['currency', 'Currency']]) {
     if (a[key] !== b[key]) descriptions.push(name + ': ' + String(a[key] ?? 'Not set') + ' to ' + String(b[key] ?? 'Not set') + '.');
+  }
+  const treatment = { facebrick: 'exposed facebrick', rendered_paint: 'render and paint', bare_brick: 'bare brick', plaster_paint: 'plaster and paint' };
+  if (a.inner_leaf_finish !== b.inner_leaf_finish) descriptions.push(`Internal brick leaf: ${treatment[a.inner_leaf_finish]} to ${treatment[b.inner_leaf_finish]}.`);
+  for (const [key, name] of [['kind', 'treatment'], ['name', 'finish'], ['hex', 'colour']]) {
+    const old = a.exterior_finish[key], next = b.exterior_finish[key];
+    if (old !== next) descriptions.push(`External brick leaf ${name}: ${key === 'kind' ? treatment[old] : old} to ${key === 'kind' ? treatment[next] : next}.`);
   }
   if (!same(a.min_room_width_mm ?? 900, b.min_room_width_mm ?? 900)) descriptions.push('Minimum room width: ' + format(a.min_room_width_mm ?? 900) + ' to ' + format(b.min_room_width_mm ?? 900) + ' mm.');
   const oldPartitions = new Map(partitionList(a).map(item => [item.id, item])), newPartitions = new Map(partitionList(b).map(item => [item.id, item]));
