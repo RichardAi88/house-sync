@@ -32,7 +32,7 @@ Entities: R0, W1, W2, W3, W4
 
 R0 is 200 mm thick, with its underside at the wall top and 300 mm overhang beyond each external wall face. Roof quantities use the compiled top surface including overhang. The default roof footprint is 11,000 x 9,000 mm, or 99.000 m2. Waterproofing, drainage, reinforcement, and structural adequacy are unverified.
 
-## D-006 Share one paint finish across both wall sides
+## D-006 Share one paint finish across both wall sides (historical, superseded by D-021)
 
 Entities: W1, W2, W3, W4
 
@@ -159,3 +159,9 @@ The structural slab spans the original clear shell. Each room uses its compiled 
 Shared construction and exterior finishes appear in the shell group. The five internal trade lines carry a stable room ID and their original rate code. Each group subtotal sums rounded item amounts. Changes use the saved quantities and underlying rate codes, and report moved/added/removed partitions and renamed/refinished rooms by ID. The original single-room BOQ retains its combined internal and exterior paint line to preserve issued quantities and comparisons.
 
 In the 10 × 8 m worked example, the full north–south wall at x = 4000 mm and one internal door yield 79.200 m² of clear rooms, 2.190 m³ of partition wall and 48.800 m skirting. Adding the eastern branch at y = 3000 mm and its door yields 78.605 m², 3.765 m³ and 58.500 m respectively. The README gives each room calculation and the priced subtotals.
+
+## D-021 Separate external facebrick and internal common brick finishes
+
+W1–W4 each remain one opening host. The model and IFC represent an outer brick leaf and an inner common brick leaf within the existing overall thickness. The concept allocation is half to each leaf. Cavity width and wall ties require project-specific detailing. The BOQ measures the entire net masonry solid once. Screen colours identify selected appearances. The installed masonry rate comes from the project rate library or its design override.
+
+New editor designs have exposed facebrick outside and plaster and paint inside. The outer leaf can also receive render and paint. The inner leaf can remain bare for future finishes. The compiler measures inside and outside faces separately after openings and junctions. Leaving the inner leaf bare omits only its plaster and paint. Partition faces remain attributed to their adjoining rooms. A colour edit records the finish selection at the same rate. Earlier designs inherit their saved shared paint on both surfaces and retain their priced scope.

@@ -49,20 +49,29 @@ def build_room_boq(settings, quantities, rooms, partitions, base_rows):
         overrides = next((r.finishes for r in settings.rooms if r.id == room["id"]), None)
         for row in base_rows:
             code = row["code"]
+            if code in {"EXTERNAL_RENDER", "INTERNAL_PLASTER", "PAINT"} and not row["measured_quantity"]:
+                continue
             finish = getattr(overrides, trades.get(code) or "", None)
+            if code == "PAINT" and settings.inner_leaf_finish == "bare_brick":
+                finish = None
             if finish:
                 row = {**row, "description": f"{row['description']}; {room['name']} interior: {finish}"}
-            add({**row, "rate_code": code}, *legacy_scope(code, room["name"]))
+            group = legacy_scope(code, room["name"])
+            if code == "PAINT" and settings.exterior_finish.kind == "facebrick":
+                group = (room["id"], room["name"])
+            add({**row, "rate_code": code}, *group)
     else:
         for code in ("FLOOR", "WALL", "ROOF", "DOOR", "WINDOW", "EXTERNAL_RENDER", "PAINT"):
             row = templates[code]
+            if code in {"EXTERNAL_RENDER", "PAINT"} and not quantities["external_render_area_m2"]:
+                continue
             if code == "FLOOR":
                 row = {**row, "description": "150 mm floor slab across the clear shell footprint"}
             elif code == "WALL":
                 row = line(code, code, quantities["shell_wall_volume_m3"], row["description"], row["element_ids"])
             elif code == "PAINT":
                 area = quantities["external_render_area_m2"]
-                desc = f"Exterior wall paint - {settings.paint_colour} ({settings.paint_hex}); measured net area {area:g} m2 x {settings.paint_coats} coats"
+                desc = f"Exterior wall paint - {settings.exterior_finish.name} ({settings.exterior_finish.hex}); measured net area {area:g} m2 x {settings.paint_coats} coats"
                 row = line(code, code, area, desc, row["element_ids"])
             add({**row, "rate_code": code}, "SHELL", SHARED_GROUP)
         for wall in partitions:
@@ -74,6 +83,8 @@ def build_room_boq(settings, quantities, rooms, partitions, base_rows):
             hosts = room["wall_element_ids"]
             for code, key, finish in ROOM_TRADES:
                 area = room[key]
+                if code in {"INTERNAL_PLASTER", "PAINT"} and not area:
+                    continue
                 description = templates[code]["description"]
                 if code == "PAINT":
                     description = f"Interior wall paint; measured net area {area:g} m2 x {settings.paint_coats} coats"

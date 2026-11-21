@@ -31,6 +31,8 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from shapely.geometry import LineString, Point, Polygon, box
 
+from .schema import BARE_BRICK_HEX, ExteriorFinish
+
 INK = "#173042"
 PALE = "#EAF3F7"
 GREY = "#61717B"
@@ -404,13 +406,25 @@ def _finish_text(value: Any) -> str:
     return str(value)
 
 
+def _inner_surface(settings: dict) -> tuple[str, str]:
+    if settings.get("inner_leaf_finish") == "bare_brick":
+        return "Bare common brick, ready for finishes", settings.get("inner_brick_hex", BARE_BRICK_HEX)
+    return f"Plaster and paint - {settings['paint_colour']}", settings["paint_hex"]
+
+
 def _room_finish_schedule(result: dict[str, Any]) -> list[tuple[str, str]]:
     rows = []
     for room in _rooms(result):
         finishes = room.get("finishes", {})
         fields = [f"Clear area {room['area_m2']:,.3f} m2"]
         fields.extend(f"{label}: {_finish_text(finishes.get(key))}" for key, label in
-                      (("floor", "Floor finish"), ("ceiling", "Ceiling finish"), ("skirting", "Skirting"), ("paint", "Wall paint")))
+                      (("floor", "Floor finish"), ("ceiling", "Ceiling finish"), ("skirting", "Skirting")))
+        bare = _data(result).get("inner_leaf_finish") == "bare_brick"
+        if bare:
+            fields.append("Shell inner leaf: bare common brick, ready for finishes")
+        if not bare or room.get("paint_area_m2", 0):
+            label = "Partition paint" if bare else "Wall paint"
+            fields.append(f"{label}: {_finish_text(finishes.get('paint'))}")
         rows.append((f"{room['id']} - {room.get('name', room['id'])}", ". ".join(fields) + "."))
     return rows
 
@@ -445,6 +459,8 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
     settings = _data(result)
     drawing = result["drawing"]
     t = drawing["wall_thickness_mm"]
+    outside = ExteriorFinish.from_settings(settings)
+    inside, inside_hex = _inner_surface(settings)
     dimensions = [
         ("Internal clear plan", f"{drawing['length_mm']:,.0f} x {drawing['width_mm']:,.0f} mm"),
         ("External wall footprint", f"{drawing['length_mm'] + 2*t:,.0f} x {drawing['width_mm'] + 2*t:,.0f} mm"),
@@ -457,10 +473,10 @@ def _specification_sections(result: dict[str, Any]) -> tuple[list[tuple[str, str
     windows = [o for o in openings if _opening_kind(o) == "window"]
     materials = [
         ("Floor slab", f"{drawing.get('slab_thickness_mm', 150):,.0f} mm concrete slab within the clear shell footprint. Finish product to be confirmed."),
-        ("Shell walls", f"{t:,.0f} mm uniform masonry assembly. Construction and performance requirements to be confirmed."),
+        ("Shell walls", f"{t:g} mm overall. The concept model assigns {t/2:g} mm to each brick leaf. Cavity, ties and detailed build-up to be confirmed."),
         ("Flat roof", f"{drawing.get('roof_thickness_mm', 200):,.0f} mm modelled roof, overhang {drawing.get('roof_overhang_mm', 300):,.0f} mm. Waterproofing specification to be confirmed."),
-        ("Shell paint finish" if _multi_room(result) else "Paint finish",
-         f"{settings['paint_colour']} ({settings['paint_hex']}). Manufacturer product and physical colour reference to be confirmed."),
+        ("External brick leaf", f"{outside.label} - {outside.name} ({outside.hex}). Confirm product and physical sample."),
+        ("Internal brick leaf", f"{inside} ({inside_hex})."),
     ]
     for partition in _partitions(result):
         run = dist(partition["start_mm"], partition["end_mm"])
@@ -657,7 +673,11 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
     scale = min(470 / (length + 2*t), 380 / (width + 2*t))
     px, py = 120.0, 230.0
     ew, eh = (length + 2*t)*scale, (width + 2*t)*scale
-    rect(px, py, ew, eh, settings["paint_hex"], INK, 1.1)
+    outside = ExteriorFinish.from_settings(settings)
+    inside, inside_hex = _inner_surface(settings)
+    rect(px, py, ew, eh, outside.hex, INK, 1.1)
+    half_leaf = t * scale / 2
+    rect(px + half_leaf, py + half_leaf, ew - 2*half_leaf, eh - 2*half_leaf, inside_hex, INK, .45)
     rect(px + t*scale, py + t*scale, length*scale, width*scale, "#FFFFFF", INK, .7)
     partitions = {partition["id"]: partition for partition in _partitions(result)}
 
@@ -748,7 +768,7 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
         ewidth, eheight = (run+2*t)*es, height*es
         text(710, top, label, 13, bold=True)
         rect(ex-overhang*es, ey, ewidth+2*overhang*es, roof_t*es, "#D8DFE3", INK, .8)
-        rect(ex, ey+roof_t*es, ewidth, eheight, settings["paint_hex"], INK, .8)
+        rect(ex, ey+roof_t*es, ewidth, eheight, outside.hex, INK, .8)
         floor_y = ey+(roof_t+height)*es
         rect(ex+t*es, floor_y, run*es, slab_t*es, "#E5E8EA", INK, .8)
         line(ex-12, floor_y+slab_t*es, ex+ewidth+12, floor_y+slab_t*es, GREY, .7)
@@ -772,8 +792,10 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
         dim_v(ey+roof_t*es, floor_y, ex-30, ex, f"{height:,.0f}")
 
     text(68, 697, f"Wall thickness {t:,.0f} mm | Roof thickness {roof_t:,.0f} mm | Roof overhang {overhang:,.0f} mm | Slab thickness {slab_t:,.0f} mm", 10)
-    rect(68, 714, 24, 15, settings["paint_hex"], BORDER, .6)
-    text(102, 726, f"{'Shell paint finish' if _multi_room(result) else 'Paint finish'}  {settings['paint_colour']}  {settings['paint_hex']}", 10)
+    for y, colour, label in [(709, outside.hex, f"External brick leaf - {outside.label}: {outside.name}"),
+                             (727, inside_hex, f"Internal brick leaf - {inside}")]:
+        rect(68, y, 24, 12, colour, BORDER, .6)
+        text(102, y + 10, f"{label}  {colour}", 9)
     text(68, 754, "Diagrammatic model drawings. Dimensions govern. Confirm construction details before issue.", 9, GREY)
     line(48, page_h-64, page_w-48, page_h-64, BORDER, .8)
     text(48, page_h-44, f"House Sync | Design revision {result['revision']}", 9, GREY)
@@ -785,6 +807,7 @@ def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict
     """Coordinate the main drawing, remaining elevations and a paginated opening schedule."""
     sheets = [drawing_primitives(result)]
     settings, d = _data(result), result["drawing"]
+    outside = ExteriorFinish.from_settings(settings)
     length, width, height, t = (d[key] for key in ("length_mm", "width_mm", "height_mm", "wall_thickness_mm"))
     roof_t, slab_t = d.get("roof_thickness_mm", 200), d.get("slab_thickness_mm", 150)
     overhang = d.get("roof_overhang_mm", 300)
@@ -819,7 +842,7 @@ def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict
                 ey = 195.0
                 ewidth, eheight = (run + 2*t)*es, height*es
                 rect(ex - overhang*es, ey, ewidth + 2*overhang*es, roof_t*es, "#D8DFE3", INK, .8)
-                rect(ex, ey + roof_t*es, ewidth, eheight, settings["paint_hex"], INK, .8)
+                rect(ex, ey + roof_t*es, ewidth, eheight, outside.hex, INK, .8)
                 floor_y = ey + (roof_t + height)*es
                 rect(ex + t*es, floor_y, run*es, slab_t*es, "#E5E8EA", INK, .8)
                 line(ex - 12, floor_y + slab_t*es, ex + ewidth + 12, floor_y + slab_t*es, GREY, .7)

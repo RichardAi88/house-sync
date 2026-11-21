@@ -24,6 +24,7 @@ class Element {
   set id(value) { this._id = value; elements.set('#' + value, this); }
   get id() { return this._id; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   trigger(name) { this.listeners[name]?.({ target: this }); }
   append(...children) { this.children.push(...children); }
@@ -65,6 +66,26 @@ test('explicit empty overrides keep a modern design library-driven despite a sta
   fillForm(normalized); const submitted = settingsFromForm();
   assert.deepEqual(submitted.rate_overrides, {}); assert.equal(submitted.rates, undefined);
   for (const [code] of RATE_ITEMS) assert.equal(document.querySelector('#override-' + code.toLowerCase().replaceAll('_', '-')).value, '');
+});
+
+test('sidebar saves each leaf independently and restores its controls when a design is reopened', () => {
+  const design = { ...modern(), exterior_finish: { kind: 'facebrick', name: 'Charcoal', hex: '#575656' } };
+  fillForm(design);
+  assert.equal(document.querySelector('#exterior-name').attributes.list, 'brick-product-names');
+  document.querySelector('#paint-hex').value = '#F3EDE0';
+  document.querySelector('#paint-colour').value = 'Warm white';
+  const painted = settingsFromForm();
+  assert.deepEqual(painted.exterior_finish, design.exterior_finish);
+  fillForm({ ...painted, inner_leaf_finish: 'bare_brick', inner_brick_hex: '#B68061' });
+  assert.equal(document.querySelector('#bare-brick-controls').hidden, false);
+  assert.equal(document.querySelector('#interior-paint-controls').hidden, true);
+  assert.equal(document.querySelector('#paint-coats-field').hidden, true);
+  const bare = settingsFromForm();
+  assert.deepEqual(bare.exterior_finish, design.exterior_finish);
+  assert.equal(bare.inner_brick_hex, '#B68061');
+  fillForm({ ...bare, inner_leaf_finish: 'plaster_paint' });
+  assert.equal(document.querySelector('#interior-paint-controls').hidden, false);
+  assert.equal(settingsFromForm().paint_hex, '#F3EDE0');
 });
 
 test('sidebar rate edits retain partition geometry, room selections and minimum width', () => {

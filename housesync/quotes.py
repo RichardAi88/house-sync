@@ -22,7 +22,7 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
-from .schema import AllowanceSettings, BuilderPricing, OpeningSettings, default_openings
+from .schema import BARE_BRICK_HEX, AllowanceSettings, BuilderPricing, ExteriorFinish, OpeningSettings, default_openings
 
 CENT = Decimal("0.01")
 ZERO = Decimal(0)
@@ -184,6 +184,11 @@ def _paint_finish(snapshot: dict) -> str:
     return f"{settings.get('paint_colour', 'Light blue')} ({settings.get('paint_hex', '#ADD8E6')})"
 
 
+def _exterior_paint(snapshot: dict) -> str:
+    outside = ExteriorFinish.from_settings(snapshot["settings"])
+    return f"{outside.name} ({outside.hex})"
+
+
 def _finish(snapshot: dict, row: dict, *, interior: bool = False) -> str | None:
     trade = _rate_code(row)
     field = ROOM_FINISH_FIELDS.get(trade)
@@ -194,6 +199,9 @@ def _finish(snapshot: dict, row: dict, *, interior: bool = False) -> str | None:
     defaults = {"floor": "Floor finish allowance", "ceiling": "Ceiling allowance",
                 "skirting": "Skirting allowance", "paint": _paint_finish(snapshot)}
     group = row.get("group_id")
+    if (trade == "PAINT" and group in {None, "SHELL"} and not interior and
+            (snapshot["settings"].get("partitions") or snapshot["settings"].get("inner_leaf_finish") == "bare_brick")):
+        return _exterior_paint(snapshot)
     if interior or not snapshot["settings"].get("partitions"):
         group = "ROOM1"
     if trade == "PAINT" and group in {None, "SHELL"}:
@@ -237,7 +245,9 @@ def _homogeneous_trades(before: dict, after: dict) -> set[str]:
 
 
 def _combined_paint(snapshot: dict, row: dict | None) -> bool:
-    return bool(row and row["code"] == "PAINT" and not snapshot["settings"].get("partitions"))
+    return bool(row and row["code"] == "PAINT" and not snapshot["settings"].get("partitions")
+                and snapshot["settings"].get("inner_leaf_finish") != "bare_brick"
+                and ExteriorFinish.from_settings(snapshot["settings"]).kind == "rendered_paint")
 
 
 def _saved_components(snapshot: dict, row: dict, *, homogeneous: bool) -> list[tuple[str, Decimal]] | None:
@@ -253,13 +263,13 @@ def _saved_components(snapshot: dict, row: dict, *, homogeneous: bool) -> list[t
     if homogeneous:
         if _combined_paint(snapshot, row):
             inside = _finish(snapshot, row, interior=True)
-            outside = _paint_finish(snapshot)
+            outside = _exterior_paint(snapshot)
             selected = inside if inside == outside else f"Interior: {inside}; exterior: {outside}"
         return [(selected, amount)]
     if not _combined_paint(snapshot, row):
         return [(selected, amount)]
     interior = _finish(snapshot, row, interior=True)
-    exterior = _paint_finish(snapshot)
+    exterior = _exterior_paint(snapshot)
     if interior == exterior:
         return [(exterior, amount)]
     try:
@@ -370,7 +380,7 @@ def _public_allowances(changes: list[dict]) -> dict[str, list[dict]]:
 def _fallback_scope(before: dict, after: dict, boq_rows: list[dict], allowance_rows: list[dict]) -> list[str]:
     """Describe selected construction changes without copying internal narratives."""
     defaults = {"length_mm": 10000, "width_mm": 8000, "height_mm": 3000, "wall_thickness_mm": 200,
-                "paint_colour": "Light blue", "paint_hex": "#ADD8E6", "paint_coats": 2}
+                "paint_colour": "Light blue", "paint_hex": "#ADD8E6", "paint_coats": 2, "inner_brick_hex": BARE_BRICK_HEX}
     old, new = ({**defaults, **snapshot["settings"]} for snapshot in (before, after))
     scope = []
     for key, label in (("length_mm", "internal length"), ("width_mm", "internal width"),
@@ -378,8 +388,16 @@ def _fallback_scope(before: dict, after: dict, boq_rows: list[dict], allowance_r
         a, b = old.get(key), new.get(key)
         if a != b and isinstance(a, (int, float)) and isinstance(b, (int, float)):
             scope.append(f"Change the house {label} from {a / 1000:g} m to {b / 1000:g} m.")
+    old_outer, new_outer = ExteriorFinish.from_settings(old), ExteriorFinish.from_settings(new)
+    if old_outer != new_outer:
+        scope.append(f"Change the external brick leaf to {new_outer.label.lower()} in {new_outer.name} ({new_outer.hex}).")
+    if old.get("inner_leaf_finish", "plaster_paint") != new.get("inner_leaf_finish", "plaster_paint"):
+        scope.append("Leave the internal brick leaf bare, ready for future finishes." if new.get("inner_leaf_finish") == "bare_brick"
+                     else "Apply plaster and paint to the internal brick leaf.")
+    if new.get("inner_leaf_finish") == "bare_brick" and old.get("inner_brick_hex") != new.get("inner_brick_hex"):
+        scope.append(f"Use {new['inner_brick_hex']} for the exposed internal brick.")
     if old.get("paint_colour") != new.get("paint_colour") or old.get("paint_hex") != new.get("paint_hex"):
-        scope.append(f"Change the wall paint finish to {new.get('paint_colour') or 'the selected finish'}.")
+        scope.append(f"Change the internal wall paint finish to {new.get('paint_colour') or 'the selected finish'}.")
     if old.get("paint_coats", 2) != new.get("paint_coats", 2):
         scope.append(f"Apply {new.get('paint_coats', 2)} paint coats to the selected wall finishes.")
     old_partitions = {row["id"]: row for row in old.get("partitions", [])}

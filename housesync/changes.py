@@ -24,13 +24,16 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemp
 
 from .quotes import diff_allowances
 from .rates import BOQ_CODES
-from .schema import HouseSettings
+from .schema import ExteriorFinish, HouseSettings
 
 CENT = Decimal("0.01")
 ZERO = Decimal(0)
 INK = "173042"
 TEAL = "1B6D65"
 PALE = "EAF3F7"
+
+WALL_TREATMENTS = {"facebrick": "exposed facebrick", "rendered_paint": "render and paint",
+                   "plaster_paint": "plaster and paint", "bare_brick": "bare brick"}
 
 FIELD_LABELS = {
     "project_name": ("Project name", "metadata"),
@@ -39,8 +42,13 @@ FIELD_LABELS = {
     "height_mm": ("Wall height", "dimensions"),
     "wall_thickness_mm": ("Wall thickness", "dimensions"),
     "min_room_width_mm": ("Minimum room width", "geometry_rules"),
-    "paint_colour": ("Paint finish", "finish"),
-    "paint_hex": ("Paint colour reference", "finish"),
+    "paint_colour": ("Interior paint finish", "finish"),
+    "paint_hex": ("Interior paint colour reference", "finish"),
+    "exterior_finish.kind": ("External brick leaf treatment", "finish"),
+    "exterior_finish.name": ("External brick leaf finish", "finish"),
+    "exterior_finish.hex": ("External brick leaf colour", "finish"),
+    "inner_leaf_finish": ("Internal brick leaf treatment", "finish"),
+    "inner_brick_hex": ("Bare internal brick colour", "finish"),
     "currency": ("Currency", "pricing"),
     "rates.floor_m2": ("Floor rate / m2", "rates"),
     "rates.wall_m3": ("Wall construction rate / m3", "rates"),
@@ -127,7 +135,8 @@ def _comparison_settings(settings: dict) -> dict:
     defaults = HouseSettings().model_dump(mode="json")
     normalised = {key: value for key, value in settings.items()
                   if key not in {"openings", "partitions", "rooms", "allowances", "rates", "rate_overrides"}}
-    for field in ("paint_coats", "rate_source", "rate_date"):
+    normalised["exterior_finish"] = ExteriorFinish.from_settings(settings).model_dump()
+    for field in ("paint_coats", "rate_source", "rate_date", "inner_leaf_finish", "inner_brick_hex"):
         normalised.setdefault(field, defaults[field])
     normalised.setdefault("min_room_width_mm", defaults.get("min_room_width_mm", 900))
     normalised["wastage"] = {**defaults["wastage"], **settings.get("wastage", {})}
@@ -650,8 +659,11 @@ def compare_revisions(before: dict, after: dict) -> dict[str, Any]:
         if field.startswith("rate_overrides."):
             label, category = f"Explicit rate override {field.split('.')[-1]}", "rates"
         suffix = " mm" if field.endswith("_mm") else ""
+        previous, proposed = _text(old), _text(new)
+        if field in {"exterior_finish.kind", "inner_leaf_finish"}:
+            previous, proposed = WALL_TREATMENTS.get(previous, previous), WALL_TREATMENTS.get(proposed, proposed)
         setting_changes.append({"field": field, "label": label, "before": old, "after": new,
-                                "description": f"{label}: {_text(old)}{suffix} to {_text(new)}{suffix}.", "category": category})
+                                "description": f"{label}: {previous}{suffix} to {proposed}{suffix}.", "category": category})
     setting_changes.extend(_opening_changes(before["settings"], after["settings"]))
     setting_changes.extend(_partition_changes(before["settings"], after["settings"]))
     setting_changes.extend(_room_changes(before, after))

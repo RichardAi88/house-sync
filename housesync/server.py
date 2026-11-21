@@ -28,7 +28,7 @@ from .purchasing import UnknownPurchaseOrder, purchase_order_pdf, purchase_order
 from .quote_documents import export_quote_documents
 from .quotes import build_variation_quote
 from .rates import RateLibrary, RateLibraryError, load_rate_library
-from .schema import HouseSettings
+from .schema import ExteriorFinish, HouseSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).parent / "static"
@@ -236,7 +236,7 @@ class Application:
             saved = self._previous()
             if saved is None:
                 library = load_rate_library(self.rate_library_path)
-                return self.build(HouseSettings(currency=library.currency), rate_library=library)
+                return self.build(HouseSettings(currency=library.currency, exterior_finish=ExteriorFinish()), rate_library=library)
             # Reopening uses the issued pricing basis. Only an explicit build
             # adopts edited CSV prices. Pre-library snapshots have no such basis.
             if "rate_library" in saved:

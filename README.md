@@ -48,7 +48,7 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 ## Available capabilities
 
 - A single-storey rectangular shell with a flat roof. The default design opens as one room with one door and two windows. Orthogonal partitions divide the shell into named rooms.
-- Editable clear internal length/width, wall height/thickness, paint name/colour and coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
+- Editable clear internal length/width, wall height/thickness, independent external and internal brick finishes, paint coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
 - A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
 - Eleven BOQ rate codes in Excel/CSV, grouped into shell and room takeoffs, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage, gross priced quantity and each item's rate basis remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
@@ -73,6 +73,20 @@ Draft plan edits do not issue documents. Downloads of the current document set r
 
 Select a derived room to enter its name and floor, ceiling, skirting or paint finish. Clear a finish to inherit the project allowance. The room follows moves of its bounding walls while its boundary identities stay the same. Splitting or merging rooms can create new identities. The plan, room finish schedule and BOQ identify the rooms saved in each revision. The variation order records partition and room edits by ID.
 
+## Choose the two brick wall finishes
+
+Under **External brick leaf**, choose **Exposed facebrick** or **Render and paint**, then set the colour and description. The facebrick description offers the five NSW catalogue names. Swatches are screen previews. Under **Internal brick leaf**, **Plaster and paint** is selected by default and has its own colour. Choose **Bare brick, ready for finishes** to omit plaster and paint from the room side of the shell. Internal partitions keep their room finishes. Select **Update house & documents** to issue both selections together.
+
+For the 10 × 8 m one-room house, the compiler measures 107.10 m² of outer wall and 102.30 m² of inner wall after openings. The BOQ prices the two leaves together as 20.94 m³ of masonry. The catalogue lists supply-only brick prices separately from the installed masonry allowance.
+
+| Outer leaf | Inner leaf | Net area to paint | Paint quantity at two coats | Illustrative BOQ subtotal (AUD) |
+|---|---|---:|---:|---:|
+| Exposed facebrick | Plaster and paint (new design) | 102.30 m² | 204.60 m² | 46,904.22 |
+| Exposed facebrick | Bare common brick | 0.00 m² | 0.00 m² | 42,055.20 |
+| Render and paint | Plaster and paint (earlier design) | 209.40 m² | 418.80 m² | 53,330.22 |
+
+Earlier designs reopen with their saved paint colour on both sides and their original priced scope. You can then edit either side independently. The model and IFC allocate half the overall thickness to each brick leaf. At 200 mm overall, each nominal leaf is 100 mm. The cavity, ties and detailed build-up require project-specific dimensions.
+
 ## Capture a change from A to B
 
 Every successful update preserves the previous design and automatically creates a comparison with the new design. Open **Changes & cost** to review the last transition, or select any two saved revisions and choose **Compare revisions**. Each report identifies its two source revisions and is saved locally alongside the revision history. Reopening the application preserves these records.
@@ -81,7 +95,7 @@ Every successful update preserves the previous design and automatically creates 
 
 The cost comparison reconciles the saved BOQ amounts. It separates changes in gross quantity (including coats and wastage) from changes in rates. Where both revisions record the rate basis, it also separates library changes from design overrides. A paint colour change at the same quantity and rate has zero cost. Earlier BOQs retain their recorded amounts. Revisions in different currencies cannot be compared. Two historical revisions in the same foreign currency can still be compared at cost. Client quotes use AUD.
 
-The default 10 x 8 m design has an illustrative subtotal of **AUD 53,330.22**. Increasing its length to 12 m at the same rates, two paint coats and default wastage gives **AUD 61,640.22**, an **AUD 8,310.00 increase**. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
+The new facebrick design increases from **AUD 46,904.22** at 10 × 8 m to **AUD 54,494.22** at 12 × 8 m. The **AUD 7,590.00** cost increase produces a client variation of **AUD 10,018.80 including GST** with the default 20% markup and zero fee. The rendered examples below reproduce the earlier finish selection. These are **illustrative AUD rates, not a tender estimate**. A paint colour change at the same quantity and rate is recorded with **zero cost difference**; the application does not invent a product price for a selected screen colour.
 
 The cost comparison covers the modelled BOQ scope. Demolition, rework, abortive work, fees, taxes and programme effects are excluded unless separately modelled. The client quote separately applies the saved commercial settings and allowance movements. It is not a record of contractual approval.
 
@@ -92,7 +106,7 @@ The cost comparison covers the modelled BOQ scope. Demolition, rework, abortive 
 3. Select **Update house & documents**. In **Changes & cost**, choose the previous revision as A and the proposal as B. B supplies the pricing settings for this quote. Check the **Internal itemised breakdown PDF** for quantities, rates, their sources and allowance movements.
 4. Share the **Client variation quote PDF** for acceptance. It includes the builder name and logo placeholders, scope, allowance movements, price, issue and expiry dates, and fields for the client's name, signature and date. The first preparation fixes the issue date in UTC. Validity defaults to 14 calendar days. Reopening the saved quote retains its dates, settings and PDFs after later edits.
 
-### Worked quote for extending the house from 10 m to 12 m
+### Worked quote for extending a rendered house from 10 m to 12 m
 
 With the supplied **illustrative AUD rates, not a tender estimate**, the 10 × 8 m house has a BOQ subtotal of AUD 53,330.22. Extending it to 12 × 8 m produces AUD 61,640.22. The table shows the generated client quote with default settings, two paint coats, default wastage and no PC or PS changes.
 
@@ -114,7 +128,7 @@ Reversing the extension with the default zero fee gives a **credit of AUD 9,141.
 
 ### Worked quote for adding a study
 
-Use the two-room partition and access door in the worked takeoff below, with the selected room descriptions and unchanged trade rates, the checked-in AUD library, no project overrides, a 20% combined markup, zero administration fee and no PC/PS changes. Revision A is the original 10 × 8 m room; revision B has partition P1 and its door. The BOQ rises from AUD 53,330.22 to AUD 57,038.34.
+Use the two-room partition and access door in the worked takeoff below, with the selected room descriptions and unchanged trade rates, the checked-in AUD library, no project overrides, a 20% combined markup, zero administration fee and no PC/PS changes. Revision A is the original rendered 10 × 8 m room; revision B has partition P1 and its door. The BOQ rises from AUD 53,330.22 to AUD 57,038.34.
 
 | Variation component | AUD |
 |---|---:|
@@ -141,7 +155,7 @@ In the editor, open **Rates → NSW brick catalogue** to compare five brick rang
 
 ## Prepare draft purchase orders
 
-Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The default BOQ produces eleven item PDFs. The verified two-room worked example produces eighteen and the three-room example twenty-four. Older saved revisions use the BOQ rows they actually contain.
+Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The one-room facebrick design produces ten item PDFs with plaster and paint inside or eight with bare brick inside. The rendered example with plaster and paint inside produces eleven. The verified two-room worked example produces eighteen and the three-room example twenty-four. Older saved revisions use the BOQ rows they actually contain.
 
 The set covers the selected revision's complete BOQ and is separate from the A-to-B client variation quote. Each PDF identifies the saved house revision and has a code-based PO reference. Its description, gross priced quantity, unit, rate, currency and amount come from that revision's saved BOQ. The exporter does not read today's library to reprice an older revision. For older BOQs without a separate gross quantity field, their saved priced quantity remains the basis.
 
@@ -201,23 +215,23 @@ Existing designs with explicit stored rates retain those values as overrides rat
 
 ## Generated example guide
 
-Use the checked-in AUD library, two paint coats, default wastage and no project overrides to reproduce the detailed examples below. BOQ amounts are measured internal costs excluding GST. Client quote amounts separately apply the proposed revision's commercial settings.
+Select **Render and paint** outside and **Plaster and paint** inside, then use the checked-in AUD library, two paint coats, default wastage and no project overrides to reproduce the detailed examples below. BOQ amounts are measured internal costs excluding GST. Client quote amounts separately apply the proposed revision's commercial settings.
 
 | Example | Clear room finish area | BOQ subtotal excluding GST | Client quote example |
 |---|---:|---:|---|
-| Default 10 × 8 m shell, one room | 80.000 m² | AUD 53,330.22 | Baseline revision A |
+| Rendered 10 × 8 m shell, one room | 80.000 m² | AUD 53,330.22 | Baseline revision A |
 | Extend the shell to 12 × 8 m | 96.000 m² | AUD 61,640.22 | AUD 10,969.20 including GST for the A-to-B variation with default commercial settings |
-| Add P1 and its access door for two rooms | 79.200 m² | AUD 57,038.34 | AUD 4,915.61 including GST from the default one-room revision, with credits at cost |
-| Add P2 and its access door for three rooms | 78.605 m² | AUD 59,872.90 | AUD 8,672.79 including GST from the default one-room revision, with credits at cost |
+| Add P1 and its access door for two rooms | 79.200 m² | AUD 57,038.34 | AUD 4,915.61 including GST from the rendered one-room revision, with credits at cost |
+| Add P2 and its access door for three rooms | 78.605 m² | AUD 59,872.90 | AUD 8,672.79 including GST from the rendered one-room revision, with credits at cost |
 | Extend the two-room layout to 12 × 8 m, keeping P1 at x = 4 m | 95.200 m² | AUD 65,348.34 | AUD 10,969.20 including GST from the two-room 10 × 8 m revision |
 
 The worked quote section also shows a fixed fee, PC/PS movements and credit treatment. A room variation can contain both additions and omissions. The quote uses the saved item movements to apply the selected margin treatment to each.
 
 ## A change you can verify
 
-The default house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. One 1.0 x 2.1 m door and two 1.5 x 1.2 m windows deduct **5.7 m2** from each set of wall faces. These hand calculations check the compiled model quantities:
+The rendered reference house has **10 x 8 m clear internal dimensions**, 200 mm walls and 3 m wall height. One 1.0 x 2.1 m door and two 1.5 x 1.2 m windows deduct **5.7 m2** from each set of wall faces. These hand calculations check the compiled model quantities:
 
-| Measured quantity | Default 10 x 8 m | Length changed to 12 x 8 m |
+| Measured quantity | Rendered 10 x 8 m | Length changed to 12 x 8 m |
 |---|---:|---:|
 | Clear floor / floor finish / ceiling area | 80.000 m2 | 96.000 m2 |
 | Net wall volume | 20.940 m3 | 23.340 m3 |
@@ -260,7 +274,7 @@ In the generated check, the west room is named **Study** and the east room **Liv
 | Three rooms · south-east | 5.95 × 2.95 | 17.5525 | 17.80 | 14.80 | 47.10 |
 | Three rooms · north-east | 5.95 × 4.95 | 29.4525 | 21.80 | 20.80 | 59.70 |
 
-P1 contributes `(8 × 3 − 1 × 2.1) × 0.1 = 2.190 m³`. At the T-junction P2 adds `(5.95 × 3 − 1 × 2.1) × 0.1 = 1.575 m³`. The slab stays at 80 m². Clear floor finishes total 79.200 m² with P1 and 78.605 m² with both walls. Exterior render stays at 107.100 m². At the checked-in AUD rates, including two paint coats and default wastage, the two-room subtotal is **AUD 57,038.34** and the three-room subtotal is **AUD 59,872.90**.
+P1 contributes `(8 × 3 − 1 × 2.1) × 0.1 = 2.190 m³`. At the T-junction P2 adds `(5.95 × 3 − 1 × 2.1) × 0.1 = 1.575 m³`. The slab stays at 80 m². Clear floor finishes total 79.200 m² with P1 and 78.605 m² with both walls. The rendered example keeps 107.100 m² of external render. At the checked-in AUD rates, including two paint coats and default wastage, the two-room subtotal is **AUD 57,038.34** and the three-room subtotal is **AUD 59,872.90**.
 
 The shell group holds the slab, roof, shell wall, individual partitions, openings and exterior finishes. Each room has its own measured finishes and subtotal. Partition volume uses the existing `WALL` rate and room lines use their existing trade rate codes. Naming a product in a finish description does not supply a new price.
 
@@ -270,8 +284,8 @@ Model dimensions are in millimetres; browser geometry is in metres. Drawings dis
 
 - Floor finish and ceiling use the clear internal room area. Ceiling is an area allowance over that footprint; no ceiling framing or suspended system is modelled.
 - Each room takes skirting around its clear perimeter, less the door widths along that room. An internal door interrupts skirting on both room faces and counts as one door product.
-- Internal plaster/render and external render use their respective net vertical wall faces and deduct all modelled door/window opening voids. They are separate trades from the structural masonry volume.
-- Painting uses both sets of net wall faces. The description retains the measured net area; the editable coat count defaults to **2**. `Net painted quantity = measured area x coats`. Ceiling, floor, roof, reveals, sills and soffits are excluded from painting.
+- Internal plaster/render applies to plastered shell faces and internal partition faces. Exterior render applies only to a rendered outer leaf. Both deduct modelled door/window opening voids. They are separate trades from the structural masonry volume.
+- Painting uses only the faces selected for a painted finish. The description retains the measured net area; the editable coat count defaults to **2**. `Net painted quantity = measured area x coats`. Ceiling, floor, roof, reveals, sills and soffits are excluded from painting.
 - Each BOQ item has an editable wastage percentage. `Gross quantity = net quantity x (1 + wastage / 100)` and `Amount = gross quantity x rate`, rounded half-up to cents per row. Paint defaults to 0% wastage, with coats applied separately. Wastage is a pricing allowance, not a change to model dimensions.
 - The roof includes a 300 mm overhang. Door/window rows count parent products once, excluding emitted frame, leaf and glazing parts.
 

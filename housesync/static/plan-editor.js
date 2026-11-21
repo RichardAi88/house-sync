@@ -529,10 +529,18 @@ export class PlanEditor {
       this.svg.append(ghost);
     }
     const walls = [ ['W1', -t, 0, L + 2 * t, t], ['W2', L, -W, t, W], ['W3', -t, -W - t, L + 2 * t, t], ['W4', -t, -W, t, W] ];
+    const outerColour = settings.exterior_finish?.hex ?? settings.paint_hex;
+    const innerColour = settings.inner_leaf_finish === 'bare_brick' ? settings.inner_brick_hex : settings.paint_hex;
+    const half = t / 2;
+    const innerBands = { W1: [-half, 0, L + t, half], W2: [L, -W, half, W],
+      W3: [-half, -W - half, L + t, half], W4: [-half, -W, half, W] };
     for (const [id, x, y, width, height] of walls) {
       const selected = this.selected?.kind === 'wall' && this.selected.id === id;
-      const wall = svgNode('rect', { x, y, width, height, fill: selected ? '#317e72' : '#526f62', stroke: selected ? '#0a7066' : '#3e5b50', 'stroke-width': selected ? 2 : 1, 'vector-effect': 'non-scaling-stroke', 'data-pe-kind': 'wall', 'data-pe-id': id, class: 'pe-wall' });
+      const wall = svgNode('rect', { x, y, width, height, fill: /^#[0-9a-f]{6}$/i.test(outerColour) ? outerColour : '#526f62', stroke: selected ? '#0a7066' : '#3e5b50', 'stroke-width': selected ? 2 : 1, 'vector-effect': 'non-scaling-stroke', 'data-pe-kind': 'wall', 'data-pe-id': id, class: 'pe-wall' });
       wall.append(svgNode('title', {}, id + ' · ' + HOST_LABELS[id] + ' wall. Select to edit the span.')); this.svg.append(wall);
+      const [bx, by, bw, bh] = innerBands[id];
+      this.svg.append(svgNode('rect', { x: bx, y: by, width: bw, height: bh,
+        fill: /^#[0-9a-f]{6}$/i.test(innerColour) ? innerColour : '#ADD8E6', 'pointer-events': 'none' }));
     }
     for (const partition of this.partitions(settings)) {
       if (!Array.isArray(partition.start_mm) || !Array.isArray(partition.end_mm)) continue;

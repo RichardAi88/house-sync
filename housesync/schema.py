@@ -236,6 +236,42 @@ class RoomSettings(BaseModel):
         return value
 
 
+class ExteriorFinish(BaseModel):
+    """The exposed surface of the outer brick leaf."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    kind: Literal["facebrick", "rendered_paint"] = "facebrick"
+    name: str = Field(default="Terracotta facebrick", min_length=1, max_length=80)
+    hex: str = Field(default="#AD684F", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def finish_name(cls, value: Any) -> str:
+        return _quote_text(value)
+
+    @field_validator("hex", mode="before")
+    @classmethod
+    def colour_reference(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @staticmethod
+    def legacy_surface(settings: dict) -> dict:
+        # Old designs applied one paint to both sides. Validate both fields with the rest of the design.
+        return {"kind": "rendered_paint", "name": settings.get("paint_colour", "Light blue"), "hex": settings.get("paint_hex", "#ADD8E6")}
+
+    @classmethod
+    def from_settings(cls, settings: dict) -> Self:
+        return cls.model_validate(settings.get("exterior_finish", cls.legacy_surface(settings)))
+
+    @property
+    def label(self) -> str:
+        return "Exposed facebrick" if self.kind == "facebrick" else "Render and paint"
+
+
+BARE_BRICK_HEX = "#B88465"
+
+
 class HouseSettings(BaseModel):
     """A rectangular shell with optional internal partitions and named rooms.
 
@@ -253,6 +289,9 @@ class HouseSettings(BaseModel):
     wall_thickness_mm: float = Field(default=200, ge=100, le=500)
     paint_colour: str = Field(default="Light blue", min_length=1, max_length=80)
     paint_hex: str = Field(default="#ADD8E6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    exterior_finish: ExteriorFinish = Field(default_factory=ExteriorFinish)
+    inner_leaf_finish: Literal["plaster_paint", "bare_brick"] = "plaster_paint"
+    inner_brick_hex: str = Field(default=BARE_BRICK_HEX, pattern=r"^#[0-9A-Fa-f]{6}$")
     currency: str = Field(default="AUD", pattern=r"^[A-Z]{3}$")
     paint_coats: StrictInt = Field(default=2, ge=1, le=10)
     rate_overrides: dict[str, Annotated[float, Field(ge=0, le=1_000_000)]] = Field(default_factory=dict)
@@ -292,6 +331,8 @@ class HouseSettings(BaseModel):
         if not isinstance(value, dict):
             return value
         values = dict(value)
+        if "exterior_finish" not in values:
+            values["exterior_finish"] = ExteriorFinish.legacy_surface(values)
         legacy = values.pop("rates", None)
         if "rate_overrides" not in values and "rates" in value:
             if not isinstance(legacy, dict):
@@ -325,7 +366,7 @@ class HouseSettings(BaseModel):
             raise ValueError("use a non-empty, single-line name without control characters")
         return value
 
-    @field_validator("paint_hex", "currency", mode="before")
+    @field_validator("paint_hex", "inner_brick_hex", "currency", mode="before")
     @classmethod
     def uppercase_code(cls, value: object) -> object:
         return value.strip().upper() if isinstance(value, str) else value
