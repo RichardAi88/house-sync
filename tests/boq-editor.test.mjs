@@ -41,14 +41,19 @@ globalThis.document = {
   querySelector(selector) { if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector); },
   querySelectorAll() { return []; }, createElement() { return new Element(); },
 };
+// Capture the preview's RGB writes without requiring WebGL in the Node suite.
+class TestColour {
+  constructor(hex) { this.rgb = hex.slice(1).match(/../g).map(pair => Number.parseInt(pair, 16)); }
+  toArray(array, offset) { array.set(this.rgb, offset); }
+}
 const appSource = (await readFile(new URL('../housesync/static/app.js', import.meta.url), 'utf8'))
-  .replace("import * as THREE from 'three';", 'const THREE = { Vector3: class {} };')
+  .replace("import * as THREE from 'three';", `const THREE = { Vector3: class {}, Color: ${TestColour.toString()} };`)
   .replace("import { OrbitControls } from '/vendor/OrbitControls.js';", '')
   .replace("import { PlanEditor } from './plan-editor.js';", '')
   .replace("from './plan-core.js'", "from '" + coreURL + "'")
   .split("form.addEventListener('submit', buildHouse);")[0]
-  + '\nexport { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison };';
-const { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison } = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
+  + '\nexport { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison, setDirty, viewer, legacyWallFaceSlots };';
+const { fillForm, settingsFromForm, comparableSettings, stableSettings, renderBOQ, renderRates, refreshRateLibrary, resetRateOverride, libraryDiffersFromRevision, rateLibraryState, state, renderComparison, setDirty, viewer, legacyWallFaceSlots } = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
 
 test('legacy entered rates migrate to independent overrides without inventing missing trade rates', () => {
   const legacy = fixture(); const normalized = normalizeBoqSettings(legacy);
@@ -86,6 +91,61 @@ test('sidebar saves each leaf independently and restores its controls when a des
   fillForm({ ...bare, inner_leaf_finish: 'plaster_paint' });
   assert.equal(document.querySelector('#interior-paint-controls').hidden, false);
   assert.equal(settingsFromForm().paint_hex, '#F3EDE0');
+});
+
+test('editing a finish updates only its rendered surfaces before save, including undo and label-only edits', t => {
+  const saved = { ...modern(), exterior_finish: { kind: 'facebrick', name: 'Terracotta', hex: '#AD684F' } };
+  const snapshot = { revision: 'original', settings: structuredClone(saved) };
+  const attribute = { array: new Uint8Array(27) };
+  const shell = { userData: { id: 'W1', kind: 'wall', faceSlots: [2, 0, 1], savedColours: ['#AD684F', '#ADD8E6', '#B88465'] },
+    geometry: { getAttribute: name => { assert.equal(name, 'color'); return attribute; } } };
+  const partition = { userData: { kind: 'wall', partition: true, savedColour: '#ADD8E6' },
+    material: { color: { set(value) { this.value = value; } } } };
+  const nonWall = { userData: { kind: 'roof' } };
+  state.result = snapshot; viewer.parts = [shell, partition, nonWall]; viewer.selected = shell; viewer.selectedFace = 1;
+  t.after(() => { state.result = null; state.dirty = false; viewer.parts = []; viewer.selected = null; viewer.finishKey = null; });
+  const readTriangle = face => Array.from({ length: 3 }, (_, vertex) => {
+    const i = (face * 3 + vertex) * 3;
+    return '#' + [...attribute.array.subarray(i, i + 3)].map(channel => channel.toString(16).padStart(2, '0')).join('').toUpperCase();
+  });
+  const check = (brick, outside, inside, paint) => {
+    for (const [face, hex] of [brick, outside, inside].entries()) assert.deepEqual(readTriangle(face), [hex, hex, hex]);
+    assert.equal(partition.material.color.value, paint);
+  };
+  fillForm(saved);
+  document.querySelector('#exterior-hex').value = '#575656';
+  document.querySelector('#exterior-name').value = 'Charcoal';
+  setDirty();
+  check('#B88465', '#575656', '#ADD8E6', '#ADD8E6');
+  assert.match(document.querySelector('#selected-element').textContent, /W1.*External.*Charcoal/);
+  assert.equal(document.querySelector('#save-settings').disabled, true);
+  assert.equal(state.dirty, true);
+  const coloured = settingsFromForm();
+  fillForm({ ...coloured, paint_hex: '#F3EDE0', inner_leaf_finish: 'bare_brick', inner_brick_hex: '#915B44' }); setDirty(false);
+  check('#915B44', '#575656', '#915B44', '#F3EDE0');
+  attribute.needsUpdate = false;
+  document.querySelector('#exterior-name').value = 'Selected facebrick'; setDirty();
+  assert.match(document.querySelector('#selected-element').textContent, /Selected facebrick/);
+  assert.equal(attribute.needsUpdate, false);
+  // The plan history and JSON import both restore the complete draft through fillForm.
+  fillForm(coloured); setDirty(false);
+  check('#B88465', '#575656', '#ADD8E6', '#ADD8E6');
+  fillForm(saved); setDirty(false);
+  check('#B88465', '#AD684F', '#ADD8E6', '#ADD8E6');
+  assert.equal(state.dirty, false);
+  assert.deepEqual(state.result, { revision: 'original', settings: saved });
+});
+
+test('a legacy shell mesh identifies external faces and corner returns, internal faces and reveals', () => {
+  const vertices = [
+    [3, -.2, 0], [4, -.2, 0], [3, -.2, 2],  // exterior
+    [3, 0, 0], [3, 0, 2], [4, 0, 0],        // interior
+    [-.2, -.2, 0], [-.2, 0, 0], [-.2, 0, 3], // external corner return
+    [3, -.2, 0], [3, 0, 0], [3, 0, 2],      // door reveal
+  ].flat();
+  const indices = Array.from({ length: 12 }, (_, i) => i);
+  assert.deepEqual(legacyWallFaceSlots({ id: 'W1', kind: 'wall' }, vertices, indices, fixture()), [0, 1, 0, 2]);
+  assert.equal(legacyWallFaceSlots({ id: 'P1', kind: 'wall' }, vertices, indices, fixture()), null);
 });
 
 test('sidebar rate edits retain partition geometry, room selections and minimum width', () => {

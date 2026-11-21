@@ -75,7 +75,7 @@ Select a derived room to enter its name and floor, ceiling, skirting or paint fi
 
 ## Choose the two brick wall finishes
 
-Under **External brick leaf**, choose **Exposed facebrick** or **Render and paint**, then set the colour and description. The facebrick description offers the five NSW catalogue names. Swatches are screen previews. Under **Internal brick leaf**, **Plaster and paint** is selected by default and has its own colour. Choose **Bare brick, ready for finishes** to omit plaster and paint from the room side of the shell. Internal partitions keep their room finishes. Select **Update house & documents** to issue both selections together.
+Under **External brick leaf**, choose **Exposed facebrick** or **Render and paint**, then set the colour and description. The facebrick description offers the five NSW catalogue names. Swatches are screen previews. Under **Internal brick leaf**, **Plaster and paint** is selected by default and has its own colour. Choose **Bare brick, ready for finishes** to omit plaster and paint from the room side of the shell. Internal partitions keep their room finishes. The plan and 3D model preview your wall colours as soon as you choose a swatch or switch to bare brick. Undo and redo update both views. In 3D, select a wall face to read its finish. Select **Update house & documents** to save the revision and regenerate its drawings, BOQ and purchase orders.
 
 For the 10 × 8 m one-room house, the compiler measures 107.10 m² of outer wall and 102.30 m² of inner wall after openings. The BOQ prices the two leaves together as 20.94 m³ of masonry. The catalogue lists supply-only brick prices separately from the installed masonry allowance.
 

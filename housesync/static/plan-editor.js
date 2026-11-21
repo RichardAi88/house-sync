@@ -1,4 +1,4 @@
-import { HOSTS, HOST_LABELS, cloneSettings, hostLength, openingOffset, openingSegment, pointToOffset, snap, auditPlan, nextOpeningId, describeChanges, DraftHistory, planHosts, hostDirection, nextPartitionId, snapPoint, movePartition, resizePartition, deletePartition as removePartition } from './plan-core.js';
+import { HOSTS, HOST_LABELS, wallFinishColours, cloneSettings, hostLength, openingOffset, openingSegment, pointToOffset, snap, auditPlan, nextOpeningId, describeChanges, DraftHistory, planHosts, hostDirection, nextPartitionId, snapPoint, movePartition, resizePartition, deletePartition as removePartition } from './plan-core.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 let editorCount = 0;
@@ -529,26 +529,27 @@ export class PlanEditor {
       this.svg.append(ghost);
     }
     const walls = [ ['W1', -t, 0, L + 2 * t, t], ['W2', L, -W, t, W], ['W3', -t, -W - t, L + 2 * t, t], ['W4', -t, -W, t, W] ];
-    const outerColour = settings.exterior_finish?.hex ?? settings.paint_hex;
-    const innerColour = settings.inner_leaf_finish === 'bare_brick' ? settings.inner_brick_hex : settings.paint_hex;
+    const finishes = wallFinishColours(settings);
     const half = t / 2;
     const innerBands = { W1: [-half, 0, L + t, half], W2: [L, -W, half, W],
       W3: [-half, -W - half, L + t, half], W4: [-half, -W, half, W] };
     for (const [id, x, y, width, height] of walls) {
       const selected = this.selected?.kind === 'wall' && this.selected.id === id;
-      const wall = svgNode('rect', { x, y, width, height, fill: /^#[0-9a-f]{6}$/i.test(outerColour) ? outerColour : '#526f62', stroke: selected ? '#0a7066' : '#3e5b50', 'stroke-width': selected ? 2 : 1, 'vector-effect': 'non-scaling-stroke', 'data-pe-kind': 'wall', 'data-pe-id': id, class: 'pe-wall' });
+      const wall = svgNode('rect', { x, y, width, height, fill: finishes.outside, stroke: selected ? '#0a7066' : '#3e5b50', 'stroke-width': selected ? 2 : 1, 'vector-effect': 'non-scaling-stroke', 'data-pe-kind': 'wall', 'data-pe-id': id, class: 'pe-wall' });
       wall.append(svgNode('title', {}, id + ' · ' + HOST_LABELS[id] + ' wall. Select to edit the span.')); this.svg.append(wall);
       const [bx, by, bw, bh] = innerBands[id];
       this.svg.append(svgNode('rect', { x: bx, y: by, width: bw, height: bh,
-        fill: /^#[0-9a-f]{6}$/i.test(innerColour) ? innerColour : '#ADD8E6', 'pointer-events': 'none' }));
+        fill: finishes.inside, 'pointer-events': 'none' }));
     }
     for (const partition of this.partitions(settings)) {
       if (!Array.isArray(partition.start_mm) || !Array.isArray(partition.end_mm)) continue;
       const [x1, y1] = partition.start_mm, [x2, y2] = partition.end_mm;
       const selected = this.selected?.kind === 'partition' && this.selected.id === partition.id;
       const group = svgNode('g', { 'data-pe-kind': 'partition', 'data-pe-id': partition.id, class: 'pe-partition' });
-      group.append(svgNode('line', { x1, y1: -y1, x2, y2: -y2, stroke: selected ? '#247f8f' : '#66788a', 'stroke-width': partition.thickness_mm, 'stroke-linecap': 'butt' }));
-      group.append(svgNode('line', { x1, y1: -y1, x2, y2: -y2, stroke: 'transparent', 'stroke-width': Math.max(partition.thickness_mm, unit * 12) }));
+      const run = { x1, y1: -y1, x2, y2: -y2, 'stroke-linecap': 'butt' };
+      group.append(svgNode('line', { ...run, stroke: selected ? '#247f8f' : '#66788a', 'stroke-width': partition.thickness_mm + (selected ? 3 : 1.5) * unit }));
+      group.append(svgNode('line', { ...run, stroke: finishes.paint, 'stroke-width': partition.thickness_mm }));
+      group.append(svgNode('line', { ...run, stroke: 'transparent', 'stroke-width': Math.max(partition.thickness_mm, unit * 12) }));
       group.append(svgNode('text', { x: (x1 + x2) / 2 + font, y: -(y1 + y2) / 2 - font, 'font-size': font, fill: '#456b80' }, partition.id));
       this.svg.append(group);
       if (selected) for (const [endpoint, point] of [['start', partition.start_mm], ['end', partition.end_mm]]) {

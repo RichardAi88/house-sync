@@ -20,6 +20,18 @@ export const RATE_DATE_DEFAULT = '2026-11-17';
 
 export const BUILDER_PRICING_DEFAULTS = Object.freeze({ overhead_margin_percent: 20, admin_fee_aud: 0, gst_percent: 10, credit_treatment: 'at_cost', validity_days: 14, builder_name: '', client_description: '' });
 
+/** Both views use the same swatches. Older designs used the interior paint on both sides. */
+export function wallFinishColours(settings) {
+  const hex = (value, fallback) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toUpperCase() : fallback;
+  const paint = hex(settings.paint_hex, '#ADD8E6');
+  const brick = hex(settings.inner_brick_hex, '#B88465');
+  return {
+    outside: hex(settings.exterior_finish?.hex, paint),
+    inside: settings.inner_leaf_finish === 'bare_brick' ? brick : paint,
+    brick, paint,
+  };
+}
+
 /** Fill absent pricing fields without replacing historical currency or entered rates. */
 export function normalizeBoqSettings(settings) {
   const result = {

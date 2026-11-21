@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { PlanEditor } from './plan-editor.js';
-import { normalizeBoqSettings, RATE_ITEMS, WASTAGE_DEFAULTS } from './plan-core.js';
+import { HOSTS, normalizeBoqSettings, wallFinishColours, RATE_ITEMS, WASTAGE_DEFAULTS } from './plan-core.js';
 
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
@@ -33,7 +33,7 @@ const rateLibraryState = { current: null, error: '', request: 0, busy: false };
 const overrideFields = Object.fromEntries(RATE_ITEMS.map(([code]) => [code, '#override-' + code.toLowerCase().replaceAll('_', '-')]));
 const wastageFields = Object.fromEntries(Object.keys(WASTAGE_DEFAULTS).map(key => [key, '#wastage-' + key.replaceAll('_', '-')]));
 const fields = ['#project-name', '#length', '#width', '#height', '#thickness', '#exterior-kind', '#exterior-name', '#exterior-hex', '#inner-leaf-finish', '#inner-brick-hex', '#paint-colour', '#paint-hex', '#paint-coats', '#currency', '#rate-source', '#rate-date', '#builder-name', '#quote-markup', '#quote-admin', '#quote-credit-treatment', '#quote-validity', '#client-description', ...Object.values(overrideFields), ...Object.values(wastageFields)];
-const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, size: 12, target: new THREE.Vector3() };
+const viewer = { scene: null, camera: null, renderer: null, controls: null, group: null, parts: [], selected: null, selectedFace: null, finishKey: null, size: 12, target: new THREE.Vector3() };
 const number = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const money = (value, currency = 'AUD') => `${currency} ${number(value)}`;
 
@@ -137,10 +137,11 @@ function updateSwatches() {
 function setDirty(syncPlan = true) {
   const settings = settingsFromForm();
   if (syncPlan) planEditor?.setDraft(settings);
+  previewWallFinishes(settings);
   state.dirty = !state.result || libraryDiffersFromRevision() || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
-  $('#sync-status').textContent = state.dirty ? 'Draft plan · update to coordinate outputs' : 'Model & documents in sync';
+  $('#sync-status').textContent = state.dirty ? 'Draft changes · update to save' : 'Model & documents in sync';
   $('#sync-status').classList.toggle('pending', state.dirty);
-  $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the model and all documents.' : 'Saved locally. All outputs share this revision.';
+  $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the house and documents to save this revision.' : 'Saved locally. All outputs share this revision.';
   setDownloadLinks();
   $('#comparison-draft-note').hidden = !state.dirty; setComparisonDownloads();
 }
@@ -791,8 +792,9 @@ function initializeViewer() {
       const hit = ray.intersectObjects(viewer.parts.filter(part => part.visible), false)[0];
       if (viewer.selected) viewer.selected.material.emissive.set(0x000000);
       viewer.selected = hit?.object || null;
-      if (viewer.selected) { viewer.selected.material.emissive.set(0x143d36); $('#selected-element').textContent = `${viewer.selected.userData.id} · ${viewer.selected.userData.name || viewer.selected.userData.kind}`; }
-      else $('#selected-element').textContent = 'Select an element to inspect';
+      viewer.selectedFace = hit?.faceIndex;
+      if (viewer.selected) viewer.selected.material.emissive.set(0x143d36);
+      describeSelectedElement(settingsFromForm());
     });
     resetCamera();
   } catch (error) {
@@ -810,6 +812,64 @@ function resetCamera() {
   viewer.controls?.update();
 }
 
+function describeSelectedElement(settings) {
+  const part = viewer.selected;
+  if (!part) { $('#selected-element').textContent = 'Select an element to inspect'; return; }
+  const { id, name, kind, faceSlots, partition } = part.userData;
+  let label = name || kind;
+  if (faceSlots) {
+    const slot = faceSlots[viewer.selectedFace], outside = settings.exterior_finish;
+    if (slot === 0) label = `External · ${outside?.kind === 'facebrick' ? 'Exposed facebrick' : 'Render and paint'} · ${outside?.name ?? settings.paint_colour}`;
+    if (slot === 1) label = settings.inner_leaf_finish === 'bare_brick' ? 'Internal · Bare common brick' : `Internal · Plaster and paint · ${settings.paint_colour}`;
+    if (slot === 2) label = 'Exposed brick core';
+  } else if (partition) label = `Partition · ${settings.paint_colour}`;
+  $('#selected-element').textContent = `${id} · ${label}`;
+}
+
+// Older saved meshes predate face slots. Use the saved geometry's boundary planes in metres.
+function legacyWallFaceSlots(item, vertices, indices, drawing) {
+  if (item.kind !== 'wall' || !HOSTS.includes(item.id) || !drawing) return null;
+  const { length_mm, width_mm, wall_thickness_mm } = drawing;
+  if (![length_mm, width_mm, wall_thickness_mm].every(Number.isFinite)) return null;
+  const t = wall_thickness_mm / 1000, length = length_mm / 1000, width = width_mm / 1000;
+  const outer = [[0, -t], [0, length + t], [1, -t], [1, width + t]];
+  const inner = [[0, 0], [0, length], [1, 0], [1, width]];
+  const slots = [];
+  for (let start = 0; start < indices.length; start += 3) {
+    const triangle = indices.slice(start, start + 3);
+    const onPlane = ([axis, coordinate]) => triangle.every(index => Math.abs(vertices[3 * index + axis] - coordinate) < 1e-5);
+    slots.push(outer.some(onPlane) ? 0 : inner.some(onPlane) ? 1 : 2);
+  }
+  return slots;
+}
+
+function colourWallFaces(attribute, slots, hexColours) {
+  const palette = hexColours.map(hex => new THREE.Color(hex));
+  slots.forEach((slot, face) => {
+    for (let vertex = 0; vertex < 3; vertex++) palette[slot].toArray(attribute.array, (face * 3 + vertex) * 3);
+  });
+  attribute.needsUpdate = true;
+}
+
+function previewWallFinishes(settings) {
+  if (!viewer.parts.length || !state.result) return;
+  if (viewer.selected) describeSelectedElement(settings);
+  const draft = wallFinishColours(settings);
+  const key = JSON.stringify(draft);
+  if (viewer.finishKey === key) return;
+  const saved = wallFinishColours(state.result.settings);
+  for (const part of viewer.parts) {
+    const { faceSlots, savedColours, partition } = part.userData;
+    if (faceSlots) {
+      const palette = ['outside', 'inside', 'brick'].map((side, i) => draft[side] === saved[side] ? savedColours[i] : draft[side]);
+      colourWallFaces(part.geometry.getAttribute('color'), faceSlots, palette);
+    } else if (partition) {
+      part.material.color.set(draft.paint === saved.paint ? part.userData.savedColour : draft.paint);
+    }
+  }
+  viewer.finishKey = key;
+}
+
 function renderModel(mesh) {
   if (!viewer.renderer) return;
   const keepView = Boolean(viewer.group);
@@ -819,7 +879,8 @@ function renderModel(mesh) {
     viewer.scene.remove(viewer.group);
     viewer.group.traverse(object => { object.geometry?.dispose(); if (Array.isArray(object.material)) object.material.forEach(material => material.dispose()); else object.material?.dispose(); });
   }
-  viewer.group = new THREE.Group(); viewer.parts = []; viewer.selected = null;
+  viewer.group = new THREE.Group(); viewer.parts = []; viewer.selected = null; viewer.selectedFace = null;
+  viewer.finishKey = JSON.stringify(wallFinishColours(state.result.settings));
   for (const item of mesh?.objects || []) {
     if (!item.vertices?.length || !item.faces?.length) continue;
     const vertices = Array.isArray(item.vertices[0]) ? item.vertices.flat() : item.vertices;
@@ -838,20 +899,22 @@ function renderModel(mesh) {
     }
     let geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(faces);
-    if (item.face_slots) {
+    const faceSlots = item.face_slots ?? legacyWallFaceSlots(item, vertices, faces, state.result.drawing ?? state.result.settings);
+    let savedColours;
+    if (faceSlots) {
       const indexed = geometry;
       geometry = indexed.toNonIndexed(); indexed.dispose();
-      const palette = item.face_colours.map(hex => new THREE.Color(hex));
-      const colours = new Float32Array(faces.length * 3);
-      item.face_slots.forEach((slot, face) => {
-        for (let vertex = 0; vertex < 3; vertex++) palette[slot].toArray(colours, (face * 3 + vertex) * 3);
-      });
-      geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+      savedColours = item.face_colours ?? Array(3).fill(item.colour);
+      const attribute = new THREE.BufferAttribute(new Float32Array(faces.length * 3), 3);
+      colourWallFaces(attribute, faceSlots, savedColours);
+      geometry.setAttribute('color', attribute);
     }
     geometry.computeVertexNormals();
     const isGlass = /glaz|glass/i.test(`${item.kind} ${item.id}`);
-    const material = new THREE.MeshStandardMaterial({ color: item.face_slots ? '#FFFFFF' : (item.colour || '#d5ded6'), vertexColors: Boolean(item.face_slots), roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass || isRoom, opacity: isRoom ? .38 : isGlass ? .48 : 1 });
+    const material = new THREE.MeshStandardMaterial({ color: faceSlots ? '#FFFFFF' : (item.colour || '#d5ded6'), vertexColors: Boolean(faceSlots), roughness: isGlass ? .14 : .83, metalness: isGlass ? .05 : 0, side: THREE.DoubleSide, transparent: isGlass || isRoom, opacity: isRoom ? .38 : isGlass ? .48 : 1 });
     const part = new THREE.Mesh(geometry, material); part.userData = { id: item.id, kind: item.kind, name: isRoom ? (state.result?.rooms?.find(room => room.id === item.id)?.name || item.name) : null };
+    if (faceSlots) Object.assign(part.userData, { faceSlots, savedColours });
+    else if (item.kind === 'wall' && (item.internal || item.partition_id)) Object.assign(part.userData, { partition: true, savedColour: item.colour });
     if (isRoom) part.position.z = .003;
     part.castShadow = !isGlass && !isRoom; part.receiveShadow = true;
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 35), new THREE.LineBasicMaterial({ color: 0x485e55, transparent: true, opacity: .18 })); part.add(edges);
