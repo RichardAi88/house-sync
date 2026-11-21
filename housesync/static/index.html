@@ -131,6 +131,18 @@
       </div>
       <div id="panel-rates" class="view-panel document-panel rates-panel" role="tabpanel" aria-labelledby="tab-rates" hidden>
         <div class="document-heading"><div><h3>Shared rate library</h3><p>Read-only library rates with editable design overrides. Edit the project rates/rates_aud.csv, or the active CSV supplied with --rates, then refresh.</p></div><button id="refresh-rate-library" type="button" class="secondary-button">Refresh rate library</button></div>
+        <details class="cost-effects" id="nsw-brick-catalogue">
+          <summary>NSW brick catalogue · five material price examples</summary>
+          <p>Source: <a href="https://www.australbricks.com.au/nsw/products?f%5B0%5D=rtype%3Abricks&amp;f%5B1%5D=rtype%3Aconcrete_bricks" target="_blank" rel="noopener">Austral Bricks NSW catalogue</a>. Reviewed 21 November 2026 using indexed supplier pages. Each product link identifies the exact colour and SKU. The supplier lists prices per brick and coverage in bricks per square metre.</p>
+          <div class="table-scroll"><table class="rates-table"><thead><tr><th>Brand</th><th>Range and colour (supplier page)</th><th>SKU</th><th>AUD per brick</th><th>Bricks per m²</th></tr></thead><tbody>
+            <tr><td>Austral Bricks</td><td><a href="https://www.australbricks.com.au/nsw/product/everyday-life?v=3234" target="_blank" rel="noopener">Everyday Life — Escape NSW</a></td><td>220250011140000301100</td><td>2.06</td><td>48.5</td></tr>
+            <tr><td>Daniel Robertson</td><td><a href="https://www.australbricks.com.au/nsw/product/hawthorn?v=3249" target="_blank" rel="noopener">Hawthorn — Black</a></td><td>710330011480000336100</td><td>3.44</td><td>48.5</td></tr>
+            <tr><td>Austral Bricks</td><td><a href="https://www.australbricks.com.au/nsw/product/san-selmo-classico?v=3496" target="_blank" rel="noopener">San Selmo Classico — Original</a></td><td>9B0580012200002422100</td><td>3.91</td><td>48.5</td></tr>
+            <tr><td>Austral Bricks</td><td><a href="https://www.australbricks.com.au/nsw/product/la-paloma?v=3311" target="_blank" rel="noopener">La Paloma — Miro</a></td><td>9A0370011930001571100</td><td>4.08</td><td>48.5</td></tr>
+            <tr><td>Bowral Bricks</td><td><a href="https://www.australbricks.com.au/nsw/product/bowral-300?v=3089" target="_blank" rel="noopener">Bowral 300 — Bowral Blue</a></td><td>280060270460000100150</td><td>5.86</td><td>60</td></tr>
+          </tbody></table></div>
+          <p>Catalogue prices are material references. Confirm GST, delivery, availability and the current price with the supplier before ordering. Labour, mortar and wastage require separate allowances. The BOQ prices masonry by volume, so these per-brick prices do not feed into estimates, quotes or purchase orders.</p>
+        </details>
         <p id="rate-library-hash" class="library-fingerprint">Current server library has not been loaded.</p>
         <p id="rate-library-saved" class="library-fingerprint">No saved revision loaded.</p>
         <p id="rate-library-difference" class="library-message" aria-live="polite"></p>

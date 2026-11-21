@@ -135,6 +135,10 @@ Keeping P1 fixed at x = 4000 mm while extending the two-room shell from 10 m to 
 
 Adding P2 to the original two-room 10 × 8 m design produces the three-room T-junction example below. That transition has AUD 2,905.22 of additions and AUD 70.66 of credits, giving a net cost change of AUD 2,834.56. With the same 20% markup, zero fee and credits at cost, the client variation is **AUD 3,757.16 including GST**. Its full saved BOQ is AUD 59,872.90 and produces twenty-four draft purchase orders.
 
+## NSW brick price references
+
+In the editor, open **Rates → NSW brick catalogue** to compare five brick ranges by brand, colour, SKU, AUD per brick and coverage. Each row links to the exact NSW supplier listing. The prices were transcribed from indexed product pages reviewed on 21 November 2026. This records the review date only. Confirm current pricing, GST and delivery with the supplier before purchasing. These examples are separate from the installed wall rate in the BOQ. [Browse the Austral Bricks NSW catalogue](https://www.australbricks.com.au/nsw/products?f%5B0%5D=rtype%3Abricks&f%5B1%5D=rtype%3Aconcrete_bricks).
+
 ## Prepare draft purchase orders
 
 Open **Purchasing** after a successful house update. Use **Download draft PO PDF** for one item, or **Download all draft POs (ZIP)** for the complete set. The default BOQ produces eleven item PDFs. The verified two-room worked example produces eighteen and the three-room example twenty-four. Older saved revisions use the BOQ rows they actually contain.
