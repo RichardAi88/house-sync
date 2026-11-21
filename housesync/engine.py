@@ -163,10 +163,10 @@ def _house(settings: HouseSettings, layout: dict | None = None) -> House:
                 assembly=assembly_id, level=ground, align="center", external=False, height=partition["height_mm"],
                 cut_against=partition["cut_against"], wall_type=partition["wall_type"],
             )
+        opening_starts = {item["opening_id"]: item["start_mm"] for item in layout["connections"]}
         for opening in settings.openings:
             partition = partition_geometry.get(opening.host)
-            span = partition["length_mm"] if partition else length if opening.host in {"W1", "W3"} else width
-            start = (span - opening.width_mm) / 2 if opening.offset_mm is None else opening.offset_mm
+            start = opening_starts[opening.id]
             # The north/south compiler paths own corner returns. Browser inputs
             # measure from the inner room corner, so translate by one thickness.
             position = start + (partition["start_extension_mm"] if partition else thickness if opening.host in {"W1", "W3"} else 0)

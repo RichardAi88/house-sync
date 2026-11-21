@@ -51,7 +51,7 @@ Built on [homespec](https://github.com/maccman/homespec) by Alex MacCaw. The ori
 - Editable clear internal length/width, wall height/thickness, independent external and internal brick finishes, paint coat count, currency, per-item wastage and optional rate overrides. A versioned CSV library supplies one rate and source/date for each of the eleven BOQ items.
 - A primary **Plan editor** for selecting walls, dragging north/east resize grips, editing dimensions, and adding, moving, resizing or deleting doors/windows. Grid snapping, pan/zoom, measurement, undo/redo, geometry checks and a draft change review support direct editing.
 - An interactive 3D model: orbit, zoom, select elements, and show/hide the roof.
-- Eleven BOQ rate codes in Excel/CSV, grouped into shell and room takeoffs, including floor finish, ceiling, skirting, internal plaster/render and external render. Net quantity, wastage, gross priced quantity and each item's rate basis remain visible. Technical specification in Word/PDF; floor plan and south/east elevations in SVG/PDF; model in IFC.
+- Eleven BOQ rate codes in Excel/CSV cover shell and room takeoffs, including floor finish, ceiling, skirting, internal plaster/render and external render. Each line shows net quantity, wastage, gross priced quantity and its rate basis. Exports include the technical specification in Word/PDF, the dimensioned floor plan and all four elevations in SVG/PDF, and the model in IFC.
 - Save/reopen a design as JSON. Previous generated revisions remain available locally.
 - Every output identifies the same content-based revision. Pending edits disable downloads until regeneration.
 - A **Changes & cost** tab compares saved revision A with revision B, records descriptions of the changes, and shows before/after BOQ quantities, rates, amounts, additions, omissions and the net estimate difference. Reports are available in Excel, CSV, PDF and JSON.
@@ -75,7 +75,11 @@ Select a derived room to enter its name and floor, ceiling, skirting or paint fi
 
 ## Choose the two brick wall finishes
 
-Under **External brick leaf**, choose **Exposed facebrick** or **Render and paint**, then set the colour and description. The facebrick description offers the five NSW catalogue names. Swatches are screen previews. Under **Internal brick leaf**, **Plaster and paint** is selected by default and has its own colour. Choose **Bare brick, ready for finishes** to omit plaster and paint from the room side of the shell. Internal partitions keep their room finishes. The plan and 3D model preview your wall colours as soon as you choose a swatch or switch to bare brick. Undo and redo update both views. In 3D, select a wall face to read its finish. Select **Update house & documents** to save the revision and regenerate its drawings, BOQ and purchase orders.
+Under **External brick leaf**, choose **Exposed facebrick** or **Render and paint**, then set the colour and description. The facebrick description offers the five NSW catalogue names. Swatches are screen previews. Under **Internal brick leaf**, **Plaster and paint** is selected by default and has its own colour. Choose **Bare brick, ready for finishes** to omit plaster and paint from the room side of the shell. Internal partitions keep their room finishes.
+
+Open **Drawings** after choosing a swatch. The south, east, north and west elevations show the external finish. The floor plan and its legend show both leaves, so you can check the internal paint or bare brick independently. The plan editor, 3D wall faces and specification finish swatches also follow your edits, including undo and redo. In 3D, select a wall face to read its finish.
+
+The drawing preview is labelled **DRAFT** while you edit. Select **Update house & documents** to save the revision and generate its PDF and SVG drawings, specification, BOQ and purchase orders.
 
 For the 10 × 8 m one-room house, the compiler measures 107.10 m² of outer wall and 102.30 m² of inner wall after openings. The BOQ prices the two leaves together as 20.94 m³ of masonry. The catalogue lists supply-only brick prices separately from the installed masonry allowance.
 

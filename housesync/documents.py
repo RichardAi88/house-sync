@@ -620,7 +620,10 @@ def _specification(result: dict[str, Any], output: Path) -> None:
     pdf_doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
-def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[str, Any]]]:
+DrawingSheet = tuple[float, float, list[dict[str, Any]]]
+
+
+def drawing_primitives(result: dict[str, Any]) -> DrawingSheet:
     """Compose a dimensioned sheet in top-left logical page coordinates."""
     settings = _data(result)
     d = result["drawing"]
@@ -696,7 +699,7 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
                                                         (end[0] - dy*half, end[1] + dx*half),
                                                         (end[0] + dy*half, end[1] - dx*half),
                                                         (start[0] + dy*half, start[1] - dx*half)]
-        polygon([model_point(point) for point in footprint], "#CBD5DC", INK, .8)
+        polygon([model_point(point) for point in footprint], settings["paint_hex"], INK, .8)
         a, b = model_point(start), model_point(end)
         label = f"{partition['id']}  {run:,.0f} mm"
         if abs(start[1] - end[1]) < .001:
@@ -792,18 +795,22 @@ def drawing_primitives(result: dict[str, Any]) -> tuple[float, float, list[dict[
         dim_v(ey+roof_t*es, floor_y, ex-30, ex, f"{height:,.0f}")
 
     text(68, 697, f"Wall thickness {t:,.0f} mm | Roof thickness {roof_t:,.0f} mm | Roof overhang {overhang:,.0f} mm | Slab thickness {slab_t:,.0f} mm", 10)
-    for y, colour, label in [(709, outside.hex, f"External brick leaf - {outside.label}: {outside.name}"),
-                             (727, inside_hex, f"Internal brick leaf - {inside}")]:
+    legend = [(outside.hex, f"External brick leaf - {outside.label}: {outside.name}"),
+              (inside_hex, f"Internal brick leaf - {inside}")]
+    if partitions:
+        legend.append((settings["paint_hex"], f"Partition paint - project colour: {settings['paint_colour']}"))
+    for index, (colour, label) in enumerate(legend):
+        y = 709 + 18 * index
         rect(68, y, 24, 12, colour, BORDER, .6)
         text(102, y + 10, f"{label}  {colour}", 9)
-    text(68, 754, "Diagrammatic model drawings. Dimensions govern. Confirm construction details before issue.", 9, GREY)
+    text(68, 754 if not partitions else 770, "Diagrammatic model drawings. Dimensions govern. Confirm construction details before issue.", 9, GREY)
     line(48, page_h-64, page_w-48, page_h-64, BORDER, .8)
     text(48, page_h-44, f"House Sync | Design revision {result['revision']}", 9, GREY)
     text(page_w-48, page_h-44, "Sheet A001 | Draft", 9, GREY, "end")
     return page_w, page_h, primitives
 
 
-def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict[str, Any]]]]:
+def drawing_sheets(result: dict[str, Any]) -> list[DrawingSheet]:
     """Coordinate the main drawing, remaining elevations and a paginated opening schedule."""
     sheets = [drawing_primitives(result)]
     settings, d = _data(result), result["drawing"]
@@ -935,23 +942,47 @@ def drawing_sheets(result: dict[str, Any]) -> list[tuple[float, float, list[dict
     return sheets
 
 
-def _drawings(result: dict[str, Any], output: Path) -> None:
-    sheets = drawing_sheets(result)
+def drawing_svg(result: dict[str, Any], *, sheets: list[DrawingSheet] | None = None) -> str:
+    """Render all drawing sheets, either for a draft preview or for a saved revision."""
+    if sheets is None:
+        sheets = drawing_sheets(result)
     width = sheets[0][0]
     svg_height = sum(sheet[1] for sheet in sheets) + 12 * (len(sheets) - 1)
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.2f}pt" height="{svg_height:.2f}pt" viewBox="0 0 {width:.2f} {svg_height:.2f}">',
-           f'<title>{html.escape(_data(result)["project_name"])} drawings revision {result["revision"]}</title>',
+           f'<title>{html.escape(_data(result)["project_name"])} drawings revision {html.escape(result["revision"])}</title>',
            '<rect width="100%" height="100%" fill="white"/>']
-    pdf = canvas.Canvas(str(output / "drawings.pdf"), pagesize=sheets[0][:2])
-    pdf.setTitle(f"{_data(result)['project_name']} drawings revision {result['revision']}")
-    pdf.setAuthor("House Sync")
     offset_y = 0.0
-    for width, height, primitives in sheets:
+    for _, height, primitives in sheets:
         svg.append(f'<g transform="translate(0 {offset_y:.3f})">')
-        pdf.setPageSize((width, height))
         for p in primitives:
             if p["kind"] == "rect":
                 svg.append(f'<rect x="{p["x"]:.3f}" y="{p["y"]:.3f}" width="{p["w"]:.3f}" height="{p["h"]:.3f}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+            elif p["kind"] == "polygon":
+                points = " ".join(f"{x:.3f},{y:.3f}" for x, y in p["points"])
+                svg.append(f'<polygon points="{points}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+            elif p["kind"] == "line":
+                svg.append(f'<line x1="{p["x1"]:.3f}" y1="{p["y1"]:.3f}" x2="{p["x2"]:.3f}" y2="{p["y2"]:.3f}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
+            else:
+                weight = "bold" if p["bold"] else "normal"
+                transform = f' transform="rotate({p["rotation"]} {p["x"]:.3f} {p["y"]:.3f})"' if p["rotation"] else ""
+                accessible = f' aria-label="{html.escape(p["full_room_name"], quote=True)}"' if p.get("full_room_name") else ""
+                svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}{accessible}>{html.escape(p["text"])}</text>')
+        svg.append("</g>")
+        offset_y += height + 12
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
+def _drawings(result: dict[str, Any], output: Path) -> None:
+    sheets = drawing_sheets(result)
+    (output / "drawings.svg").write_text(drawing_svg(result, sheets=sheets), encoding="utf-8")
+    pdf = canvas.Canvas(str(output / "drawings.pdf"), pagesize=sheets[0][:2])
+    pdf.setTitle(f"{_data(result)['project_name']} drawings revision {result['revision']}")
+    pdf.setAuthor("House Sync")
+    for width, height, primitives in sheets:
+        pdf.setPageSize((width, height))
+        for p in primitives:
+            if p["kind"] == "rect":
                 pdf.setStrokeColor(colors.HexColor(p["stroke"]))
                 pdf.setLineWidth(p["line_width"])
                 fill = p["fill"] != "none"
@@ -959,8 +990,6 @@ def _drawings(result: dict[str, Any], output: Path) -> None:
                     pdf.setFillColor(colors.HexColor(p["fill"]))
                 pdf.rect(p["x"], height-p["y"]-p["h"], p["w"], p["h"], fill=int(fill), stroke=1)
             elif p["kind"] == "polygon":
-                points = " ".join(f"{x:.3f},{y:.3f}" for x, y in p["points"])
-                svg.append(f'<polygon points="{points}" fill="{p["fill"]}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
                 pdf.setStrokeColor(colors.HexColor(p["stroke"]))
                 pdf.setLineWidth(p["line_width"])
                 fill = p["fill"] != "none"
@@ -972,15 +1001,10 @@ def _drawings(result: dict[str, Any], output: Path) -> None:
                 path.close()
                 pdf.drawPath(path, fill=int(fill), stroke=1)
             elif p["kind"] == "line":
-                svg.append(f'<line x1="{p["x1"]:.3f}" y1="{p["y1"]:.3f}" x2="{p["x2"]:.3f}" y2="{p["y2"]:.3f}" stroke="{p["stroke"]}" stroke-width="{p["line_width"]}"/>')
                 pdf.setStrokeColor(colors.HexColor(p["stroke"]))
                 pdf.setLineWidth(p["line_width"])
                 pdf.line(p["x1"], height-p["y1"], p["x2"], height-p["y2"])
             else:
-                weight = "bold" if p["bold"] else "normal"
-                transform = f' transform="rotate({p["rotation"]} {p["x"]:.3f} {p["y"]:.3f})"' if p["rotation"] else ""
-                accessible = f' aria-label="{html.escape(p["full_room_name"], quote=True)}"' if p.get("full_room_name") else ""
-                svg.append(f'<text x="{p["x"]:.3f}" y="{p["y"]:.3f}" font-family="Arial, sans-serif" font-size="{p["size"]}" font-weight="{weight}" text-anchor="{p["anchor"]}" fill="{p["fill"]}"{transform}{accessible}>{html.escape(p["text"])}</text>')
                 pdf.setFillColor(colors.HexColor(p["fill"]))
                 pdf.setFont("Helvetica-Bold" if p["bold"] else "Helvetica", p["size"])
                 draw = {"start": pdf.drawString, "middle": pdf.drawCentredString, "end": pdf.drawRightString}[p["anchor"]]
@@ -992,11 +1016,7 @@ def _drawings(result: dict[str, Any], output: Path) -> None:
                     pdf.restoreState()
                 else:
                     draw(p["x"], height-p["y"], p["text"])
-        svg.append("</g>")
-        offset_y += height + 12
         pdf.showPage()
-    svg.append("</svg>")
-    (output / "drawings.svg").write_text("\n".join(svg), encoding="utf-8")
     pdf.save()
 
 

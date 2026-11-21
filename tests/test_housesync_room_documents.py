@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from reportlab import rl_config
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
-from housesync.documents import drawing_primitives, drawing_sheets, export_documents
+from housesync.documents import drawing_primitives, drawing_sheets, drawing_svg, export_documents
 
 
 @pytest.fixture
@@ -111,6 +111,39 @@ def test_room_finish_schedule_and_scope_survive_word_pdf_svg_exports(tmp_path, r
     assert (tmp_path / "drawings.pdf").read_bytes().startswith(b"%PDF-")
 
 
+@pytest.mark.parametrize(("kind", "inner_leaf", "inner_hex"), [
+    ("facebrick", "bare_brick", "#0000FF"),
+    ("rendered_paint", "plaster_paint", "#00FF00"),
+])
+def test_drawing_colours_match_both_leaves_and_partition_paint(tmp_path, rooms_result, monkeypatch, kind, inner_leaf, inner_hex):
+    # Primary colours give the PDF fill operators exact, easily checked RGB values.
+    rooms_result["settings"].update(exterior_finish={"kind": kind, "name": "Red & ochre", "hex": "#FF0000"},
+                                    inner_leaf_finish=inner_leaf, inner_brick_hex="#0000FF", paint_hex="#00FF00")
+    monkeypatch.setattr(rl_config, "pageCompression", 0)
+    preview = drawing_svg(rooms_result)
+    export_documents(rooms_result, tmp_path)
+    assert (tmp_path / "drawings.svg").read_text(encoding="utf-8") == preview
+    first, second = ET.fromstring(preview).findall("{*}g")
+    plan_boxes = first.findall("{*}rect")
+    assert [rect.get("fill") for rect in plan_boxes[1:3]] == ["#FF0000", inner_hex]
+    assert [p.get("fill") for p in first.findall("{*}polygon") if p.get("stroke-width") == "0.8"] == ["#00FF00"]
+    assert [p.get("fill") for p in first.findall("{*}polygon") if p.get("stroke-width") == "0.65"] == ["#FFFFFF", "#DCEFF7"]
+    # Each sheet holds two elevations. The roof precedes the exterior wall in each view.
+    for sheet in (first, second):
+        elements = list(sheet)
+        faces = [elements[i + 2] for i, node in enumerate(elements) if "elevation facing" in (node.text or "")]
+        assert len(faces) == 2
+        assert all(face.tag.endswith("}rect") and face.get("fill") == "#FF0000" for face in faces)
+    labels = [node.text for node in first.findall("{*}text")]
+    assert any("Red & ochre" in label and "#FF0000" in label for label in labels)
+    assert any("Internal brick leaf" in label and inner_hex in label for label in labels)
+    assert any("Partition paint" in label and "#00FF00" in label for label in labels)
+    pdf = (tmp_path / "drawings.pdf").read_bytes()
+    assert pdf.count(b"1 0 0 rg") == 6  # four elevations, outer plan band and swatch
+    assert pdf.count(b"0 1 0 rg") == (2 if inner_leaf == "bare_brick" else 4)
+    assert pdf.count(b"0 0 1 rg") == (2 if inner_leaf == "bare_brick" else 0)
+
+
 def test_room_boq_headings_subtotals_and_grand_total_do_not_double_count(tmp_path, rooms_result):
     export_documents(rooms_result, tmp_path)
     worksheet = load_workbook(tmp_path / "boq.xlsx", data_only=False).active
@@ -156,8 +189,10 @@ def test_compiled_two_room_snapshot_exports_its_actual_groups_and_finishes(tmp_p
     from housesync.engine import build_house
     from housesync.layout import derive_layout
     from housesync.schema import HouseSettings
+    from housesync.server import draft_drawing_svg
 
     settings = HouseSettings().model_dump(mode="json")
+    next(opening for opening in settings["openings"] if opening["id"] == "D1")["offset_mm"] = 1300
     settings["partitions"] = [{"id": "P1", "start_mm": [4000, 0], "end_mm": [4000, 8000], "thickness_mm": 100,
                                "height_mm": 3000, "wall_type": "Stud partition"}]
     settings["openings"].append({"id": "D2", "kind": "door", "host": "P1", "offset_mm": 3000,
@@ -169,6 +204,8 @@ def test_compiled_two_room_snapshot_exports_its_actual_groups_and_finishes(tmp_p
     result = build_house(HouseSettings.model_validate(settings), tmp_path / "compiled")
     assert [room["area_m2"] for room in result["rooms"]] == [31.6, 47.6]
     export_documents(result, tmp_path / "documents")
+    issued_svg = (tmp_path / "documents" / "drawings.svg").read_text(encoding="utf-8")
+    assert draft_drawing_svg(HouseSettings.model_validate(settings)) == issued_svg.replace(result["revision"], "DRAFT")
     _, _, primitives = drawing_primitives(result)
     labels = [item["text"] for item in primitives if item["kind"] == "text"]
     assert labels.count("D2") == 1

@@ -6,6 +6,7 @@ import { HOSTS, normalizeBoqSettings, wallFinishColours, RATE_ITEMS, WASTAGE_DEF
 const $ = (selector) => document.querySelector(selector);
 const form = $('#house-form');
 const state = { result: null, dirty: false, busy: false, selected: null, settingsURL: null };
+const drawingPreview = { key: null, timer: null, controller: null, objectURL: null };
 let planEditor = null;
 const legacyOpenings = () => [
   { id: 'D1', kind: 'door', host: 'W1', offset_mm: null, width_mm: 1000, height_mm: 2100, sill_mm: 0 },
@@ -138,7 +139,9 @@ function setDirty(syncPlan = true) {
   const settings = settingsFromForm();
   if (syncPlan) planEditor?.setDraft(settings);
   previewWallFinishes(settings);
+  syncDrawingPreview(settings);
   state.dirty = !state.result || libraryDiffersFromRevision() || stableSettings(settings) !== stableSettings(comparableSettings(state.result.settings));
+  if (state.result && $('#panel-spec').hidden === false) renderSpec(state.result, state.dirty ? settings : null);
   $('#sync-status').textContent = state.dirty ? 'Draft changes · update to save' : 'Model & documents in sync';
   $('#sync-status').classList.toggle('pending', state.dirty);
   $('#form-status').textContent = libraryDiffersFromRevision() ? 'Rate library changed. Update to save a newly priced revision; earlier outputs stay unchanged.' : state.dirty ? 'Review the draft, then update the house and documents to save this revision.' : 'Saved locally. All outputs share this revision.';
@@ -179,6 +182,69 @@ function downloadURL(value) {
     const url = new URL(value, window.location.origin);
     return url.origin === window.location.origin ? url.href : null;
   } catch { return null; }
+}
+
+function drawingSettings(settings) {
+  const fields = ['project_name', 'length_mm', 'width_mm', 'height_mm', 'wall_thickness_mm',
+    'exterior_finish', 'inner_leaf_finish', 'inner_brick_hex', 'paint_hex', 'paint_colour',
+    'openings', 'partitions', 'rooms', 'min_room_width_mm'];
+  return Object.fromEntries(fields.map(field => [field, settings[field]]));
+}
+
+function syncDrawingPreview(settings) {
+  const result = state.result;
+  if ($('#panel-drawings').hidden) return;
+  const file = downloadURL(result?.files?.drawings_svg);
+  if (!file) return;
+  const image = $('#drawing-preview');
+  const status = $('#drawing-status');
+  const draft = drawingSettings(settings);
+  const draftKey = stableSettings(draft);
+  const saved = draftKey === stableSettings(drawingSettings(comparableSettings(result.settings)));
+  const key = saved ? result.revision : draftKey;
+  if (drawingPreview.key === key) return;
+  clearTimeout(drawingPreview.timer);
+  drawingPreview.controller?.abort();
+  drawingPreview.key = key;
+  if (drawingPreview.objectURL) {
+    URL.revokeObjectURL(drawingPreview.objectURL);
+    drawingPreview.objectURL = null;
+  }
+  if (saved) {
+    const url = new URL(file);
+    url.searchParams.set('revision', result.revision);
+    image.src = url.href;
+    image.hidden = false;
+    image.style.visibility = '';
+    status.textContent = `Drawings from saved revision ${result.revision}.`;
+    return;
+  }
+  // Keep the sheet's height while loading so a reader on the rear elevations stays in place.
+  image.style.visibility = 'hidden';
+  status.textContent = 'Updating draft drawings…';
+  const controller = new AbortController();
+  drawingPreview.controller = controller;
+  drawingPreview.timer = setTimeout(async () => {
+    try {
+      const response = await fetch('/api/drawings-preview', { method: 'POST', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Request failed (${response.status}).`);
+      }
+      const svg = await response.blob();
+      if (controller.signal.aborted) return;
+      drawingPreview.objectURL = URL.createObjectURL(svg);
+      image.src = drawingPreview.objectURL;
+      image.hidden = false;
+      image.style.visibility = '';
+      status.textContent = 'Draft drawings. Update house & documents to save and download this set.';
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      drawingPreview.key = null;
+      status.textContent = `Draft drawings unavailable. ${error.message}`;
+    }
+  }, 120);
 }
 
 function setDownloadLinks() {
@@ -222,8 +288,7 @@ function resultReceived(result, populate = false) {
   renderSpec(result);
   renderRates();
   updateOverrideHints();
-  const drawing = downloadURL(result.files?.drawings_svg);
-  if (drawing) $('#drawing-preview').src = `${drawing}${drawing.includes('?') ? '&' : '?'}revision=${encodeURIComponent(result.revision)}`;
+  syncDrawingPreview(comparableSettings(result.settings));
   renderModel(result.mesh);
   setDownloadLinks();
   $('#comparison-draft-note').hidden = true;
@@ -426,12 +491,15 @@ function renderBOQ(result) {
   $('#measurement-note').textContent = [result.measurement_rule || result.measurement_rules || 'Quantities use compiled geometry. Paint net quantity is measured area multiplied by coats. Gross quantity includes item wastage and is the priced quantity.', 'Rate basis identifies each saved item as library or design override, with its recorded source and effective date. The subtotal covers only modelled scope.'].join(' ');
 }
 
-function renderSpec(result) {
+function renderSpec(result, draft = null) {
   const settings = normalizeBoqSettings(result.settings);
   const drawing = result.drawing || {};
-  $('#spec-title').textContent = settings.project_name;
-  $('#spec-revision').textContent = `Design revision ${result.revision} · dimensions in millimetres`;
-  const container = $('#spec-content');
+  $('#spec-title').textContent = draft?.project_name ?? settings.project_name;
+  $('#spec-revision').textContent = draft
+    ? 'Draft finish preview · Choose Update house & documents for the measured schedules and downloads.'
+    : `Design revision ${result.revision} · dimensions in millimetres`;
+  let container = $('#spec-content');
+  const savedOpen = draft && container.lastElementChild?.tagName === 'DETAILS' && container.lastElementChild.open;
   container.replaceChildren();
   const section = (title, paragraphs) => {
     const part = document.createElement('section'); part.className = 'spec-section';
@@ -440,16 +508,31 @@ function renderSpec(result) {
     container.append(part);
     return part;
   };
+  const wallFinishes = (title, selection) => {
+    const outside = selection.exterior_finish;
+    const bare = selection.inner_leaf_finish === 'bare_brick';
+    const colours = wallFinishColours(selection);
+    const finish = section(title, [
+      `External brick leaf · ${outside.kind === 'facebrick' ? 'Exposed facebrick' : 'Render and paint'} · ${outside.name} (${colours.outside}).`,
+      bare ? `Internal brick leaf · Bare common brick (${colours.inside}), ready for finishes.` : `Internal brick leaf · Plaster and paint · ${selection.paint_colour} (${colours.inside}).`,
+    ]);
+    finish.querySelectorAll('p').forEach((p, i) => {
+      const swatch = document.createElement('span'); swatch.className = 'spec-colour';
+      swatch.style.backgroundColor = i === 0 ? colours.outside : colours.inside; p.prepend(swatch);
+    });
+    return finish;
+  };
+  if (draft) {
+    wallFinishes('Wall finishes', draft);
+    const saved = document.createElement('details');
+    saved.open = Boolean(savedOpen);
+    const label = document.createElement('summary');
+    label.textContent = `Saved specification · revision ${result.revision}`;
+    saved.append(label); container.append(saved); container = saved;
+  }
   section('01 · Scope & setting out', [`Single-storey rectangular house with clear internal dimensions of ${number(settings.length_mm, 0)} × ${number(settings.width_mm, 0)} mm. Wall height ${number(settings.height_mm, 0)} mm; wall thickness ${number(settings.wall_thickness_mm, 0)} mm.`, 'Refer to the coordinated floor plan and elevations for element locations and overall dimensions.']);
-  const outside = settings.exterior_finish, bare = settings.inner_leaf_finish === 'bare_brick';
-  const finish = section('02 · Wall finishes', [
-    `External brick leaf · ${outside.kind === 'facebrick' ? 'Exposed facebrick' : 'Render and paint'} · ${outside.name} (${outside.hex}).`,
-    bare ? `Internal brick leaf · Bare common brick (${settings.inner_brick_hex}), ready for finishes.` : `Internal brick leaf · Plaster and paint · ${settings.paint_colour} (${settings.paint_hex}).`,
-  ]);
-  const colours = [outside.hex, bare ? settings.inner_brick_hex : settings.paint_hex];
-  finish.querySelectorAll('p').forEach((p, i) => {
-    const swatch = document.createElement('span'); swatch.className = 'spec-colour'; swatch.style.backgroundColor = colours[i]; p.prepend(swatch);
-  });
+  const finish = wallFinishes('02 · Wall finishes', settings);
+  const bare = settings.inner_leaf_finish === 'bare_brick';
   const paint = result.partitions?.length ? null : result.boq?.find(row => row.code === 'PAINT');
   if (paint?.net_quantity !== undefined) { const paragraph = document.createElement('p'); paragraph.textContent = `${number(paint.measured_quantity, 3)} m2 measured net wall area x ${settings.paint_coats} coats = ${number(paint.net_quantity, 3)} m2 before ${number(paint.wastage_percent)}% wastage; priced gross quantity ${number(paint.gross_quantity, 3)} m2.`; finish.append(paragraph); }
   const openingDescriptions = (drawing.openings || []).map(opening => `${opening.id} on ${opening.host}: ${number(opening.width_mm, 0)} mm wide × ${number(opening.height_mm, 0)} mm high; start ${number(opening.start_mm, 0)} mm from the host inner reference${opening.sill_mm ? `; sill ${number(opening.sill_mm, 0)} mm` : ''}.`);
@@ -958,6 +1041,8 @@ function showView(name) {
   document.querySelectorAll('.view-tab').forEach(tab => { const active = tab.dataset.panel === name; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
   document.querySelectorAll('.view-panel').forEach(panel => { panel.hidden = panel.id !== 'panel-' + name; });
   if (name === 'plan') planEditor?.focus();
+  if (name === 'spec' && state.result) renderSpec(state.result, state.dirty ? settingsFromForm() : null);
+  if (name === 'drawings') syncDrawingPreview(settingsFromForm());
 }
 document.querySelectorAll('.view-tab').forEach(button => button.addEventListener('click', () => showView(button.dataset.panel)));
 

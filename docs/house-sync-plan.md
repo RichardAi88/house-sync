@@ -30,7 +30,7 @@ The demonstration starts with a single room in a rectangular shell, as a concept
 | BOQ | Shell and room lines using eleven trade codes, exported to Excel and CSV, with net quantities, wastage, gross priced quantities and row-level rate provenance |
 | Rate library | Editable `rates/rates_aud.csv`, one source/date per BOQ code, library snapshot SHA-256, optional project overrides |
 | Technical specification | Draft schedule of dimensions, materials, finishes, and measurement scope, exported to Word and PDF |
-| Drawings | Dimensioned floor plan and south/east elevations, exported to SVG and PDF |
+| Drawings | Live draft floor plan, four exterior elevations and opening schedule, with SVG and PDF exports for each saved revision |
 | Client variation quote | Proposed revision's markup, fee, credit policy, PC/PS movements, signed GST and validity; separate client/internal PDFs |
 | Purchasing | Fillable draft PDF per saved BOQ row or complete ZIP, without repricing a historical revision |
 | Model data | IFC, compiled intermediate representation, source settings, and upstream schedules/drawings |

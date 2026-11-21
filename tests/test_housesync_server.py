@@ -429,3 +429,19 @@ def test_partition_preview_returns_rooms_before_access_is_resolved_without_publi
     assert sorted(room["area_m2"] for room in preview["rooms"]) == [31.6, 47.6]
     assert any("unreachable" in error for error in preview["checks"]["errors"])
     assert not fake_exports["builds"] and application.revisions() == []
+
+
+def test_drawing_preview_uses_draft_colours_without_pricing_or_publishing(http_application, fake_exports, tmp_path):
+    application, request, _ = http_application
+    application.rate_library_path = tmp_path / "unavailable.csv"
+    draft = {"exterior_finish": {"kind": "facebrick", "name": "Dark ochre", "hex": "#AB623D"},
+             "paint_colour": "Sea green", "paint_hex": "#458174", "length_mm": 12000}
+    status, svg, headers = request("POST", "/api/drawings-preview", draft)
+    assert status == 200 and headers["Content-Type"].startswith("image/svg+xml")
+    assert svg.count(b"REV DRAFT") == 2
+    for label in (b"Dark ochre", b"#AB623D", b"Sea green", b"#458174", b"12,000 clear"):
+        assert label in svg
+    status, error, _ = request("POST", "/api/drawings-preview", {**draft, "paint_hex": "invalid"})
+    assert status == 422 and "paint_hex" in json.loads(error)["error"]
+    assert not fake_exports["builds"] and not fake_exports["exports"]
+    assert not list(application.output_root.iterdir())
